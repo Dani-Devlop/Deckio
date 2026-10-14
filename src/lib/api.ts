@@ -136,6 +136,13 @@ export const api = {
   login: (email: string, password: string) =>
     request<AuthResponse>("POST", "/api/auth/login", { email, password }),
   me: () => request<User>("GET", "/api/auth/me"),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<void>("PUT", "/api/auth/password", {
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  deleteAccount: (password: string) =>
+    request<void>("POST", "/api/auth/account/delete", { password }),
 
   // ---- Decks ----
   decks: {
@@ -144,6 +151,7 @@ export const api = {
     create: (payload: DeckInput) => request<Deck>("POST", "/api/decks", payload),
     update: (id: number, payload: Partial<DeckInput>) =>
       request<Deck>("PUT", `/api/decks/${id}`, payload),
+    duplicate: (id: number) => request<Deck>("POST", `/api/decks/${id}/duplicate`),
     remove: (id: number) => request<void>("DELETE", `/api/decks/${id}`),
   },
 
@@ -199,7 +207,8 @@ export const api = {
 
   // ---- Stats ----
   stats: {
-    overview: () => request<StatsOverview>("GET", "/api/stats/overview"),
+    overview: (days?: number) =>
+      request<StatsOverview>("GET", `/api/stats/overview${days ? `?days=${days}` : ""}`),
     deck: (id: number) => request<DeckStats>("GET", `/api/stats/decks/${id}`),
     weakCards: () => request<WeakCard[]>("GET", "/api/stats/weak-cards"),
   },

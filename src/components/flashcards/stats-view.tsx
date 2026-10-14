@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -13,7 +13,6 @@ import {
   Trophy,
   Zap,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +20,124 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api } from "@/lib/api";
 import { accuracyBg, accuracyColor, dayLabel, timeAgo } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
-import type { Deck, StatsOverview, WeakCard } from "@/lib/types";
+import type { ActivityDay, Deck, StatsOverview, WeakCard } from "@/lib/types";
+
+/** Days fetched for the heatmap — 26 full weeks (fills the card nicely). */
+const HEATMAP_DAYS = 182;
+
+/** Emerald color scale for the heatmap (index 1..4, 0 = empty). */
+const HEAT_COLORS = ["", "#a7f3d0", "#6ee7b7", "#34d399", "#059669"];
+
+/** GitHub-style review heatmap: weeks × 7 days, oldest → newest, column per week. */
+function Heatmap({ activity }: { activity: ActivityDay[] }) {
+  const { weeks, monthLabels, total } = useMemo(() => {
+    const byDate = new Map(activity.map((a) => [a.date, a]));
+    // The activity array is exactly `HEATMAP_DAYS` long and ends today (UTC).
+    const last = activity.length ? activity[activity.length - 1] : null;
+    const end = last ? new Date(`${last.date}T00:00:00`) : new Date();
+    // Pad the start so each column is a full Sun→Sat week.
+    const startOffsetDays = HEATMAP_DAYS - 1;
+    const start = new Date(end);
+    start.setDate(start.getDate() - startOffsetDays);
+    while (start.getDay() !== 0) start.setDate(start.getDate() - 1); // back to Sunday
+
+    const cols: ActivityDay[][] = [];
+    const labels: { text: string; col: number }[] = [];
+    let cursor = new Date(start);
+    let lastMonth = -1;
+    while (cursor <= end) {
+      const col: ActivityDay[] = [];
+      for (let dow = 0; dow < 7; dow++) {
+        if (cursor > end) break;
+        const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+        col.push(
+          byDate.get(key) ?? { date: key, reviews: 0, correct: 0 }
+        );
+        if (dow === 0 && cursor.getMonth() !== lastMonth) {
+          labels.push({
+            text: cursor.toLocaleDateString(undefined, { month: "short" }),
+            col: cols.length,
+          });
+          lastMonth = cursor.getMonth();
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      cols.push(col);
+    }
+    const sum = activity.reduce((acc, a) => acc + a.reviews, 0);
+    return { weeks: cols, monthLabels: labels, total: sum };
+  }, [activity]);
+
+  const max = Math.max(1, ...activity.map((a) => a.reviews));
+
+  return (
+    <div>
+      <div className="nice-scrollbar overflow-x-auto pb-1">
+        {/* Fixed-size cells, centered like GitHub's contribution graph; the
+            inner width keeps cells square and scrolls on narrow screens. */}
+        <div className="mx-auto w-fit min-w-max">
+          {/* Month labels row */}
+          <div className="flex gap-[3px] pl-7">
+            {weeks.map((_, i) => (
+              <div key={i} className="relative w-3 shrink-0 text-[10px] text-muted-foreground">
+                {monthLabels.find((m) => m.col === i) && (
+                  <span className="absolute left-0 top-0 whitespace-nowrap">
+                    {monthLabels.find((m) => m.col === i)!.text}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-[3px]">
+            {/* Weekday labels column */}
+            <div className="flex w-7 shrink-0 flex-col gap-[3px] text-[10px] leading-3 text-muted-foreground">
+              {["Sun", "", "Tue", "", "Thu", "", "Sat"].map((d, i) => (
+                <span key={i} className="h-3">
+                  {d}
+                </span>
+              ))}
+            </div>
+            {weeks.map((col, ci) => (
+              <div key={ci} className="flex w-3 shrink-0 flex-col gap-[3px]">
+                {col.map((day) => {
+                  const level =
+                    day.reviews === 0 ? 0 : Math.min(4, Math.ceil((day.reviews / max) * 4));
+                  return (
+                    <span
+                      key={day.date}
+                      className={`h-3 w-3 rounded-[3px] transition-transform hover:scale-125 hover:ring-2 hover:ring-amber-500/60 ${
+                        level === 0 ? "bg-muted" : ""
+                      }`}
+                      style={{ backgroundColor: level ? HEAT_COLORS[level] : undefined }}
+                      title={`${day.date}: ${day.reviews} review${day.reviews === 1 ? "" : "s"} (${day.correct} correct)`}
+                    />
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+        <span>
+          {total} review{total === 1 ? "" : "s"} in 26 weeks
+        </span>
+        <span className="flex items-center gap-1">
+          Less
+          {[0, 1, 2, 3, 4].map((lvl) => (
+            <span
+              key={lvl}
+              className={`h-3 w-3 rounded-[3px] ${lvl === 0 ? "bg-muted" : ""}`}
+              style={lvl ? { backgroundColor: HEAT_COLORS[lvl] } : undefined}
+              aria-hidden
+            />
+          ))}
+          More
+        </span>
+      </div>
+    </div>
+  );
+}
 
 /** KPI tile. */
 function Kpi({
@@ -61,8 +177,9 @@ export function StatsView() {
 
   const load = useCallback(async () => {
     try {
+      // 91-day window powers both the heatmap and (sliced) the weekly bars.
       const [o, w, d] = await Promise.all([
-        api.stats.overview(),
+        api.stats.overview(HEATMAP_DAYS),
         api.stats.weakCards(),
         api.decks.list(),
       ]);
@@ -109,6 +226,7 @@ export function StatsView() {
   }
 
   const maxActivity = Math.max(1, ...overview.activity.map((a) => a.reviews));
+  const last7 = overview.activity.slice(-7); // weekly bars + "This week" KPI
   const decksByAccuracy = [...decks]
     .filter((d) => d.accuracy != null && d.reviews_count > 0)
     .sort((a, b) => (b.accuracy ?? 0) - (a.accuracy ?? 0));
@@ -163,27 +281,42 @@ export function StatsView() {
         <Kpi
           icon={BookOpen}
           label="This week"
-          value={overview.activity.reduce((sum, a) => sum + a.reviews, 0)}
+          value={last7.reduce((sum, a) => sum + a.reviews, 0)}
           accent="bg-teal-100 text-teal-600"
           sub="reviews in 7 days"
         />
       </div>
 
+      {/* ---------- Review heatmap (26 weeks) ---------- */}
+      <section className="mt-6 rounded-2xl border bg-card p-6" aria-label="Review heatmap, last 26 weeks">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-semibold">Review heatmap</h2>
+          <Badge variant="outline" className="gap-1 text-xs text-muted-foreground">
+            last 26 weeks
+          </Badge>
+        </div>
+        <div className="mt-5">
+          <Heatmap activity={overview.activity} />
+        </div>
+      </section>
+
       {/* ---------- Activity chart ---------- */}
       <section className="mt-6 rounded-2xl border bg-card p-6" aria-label="Activity last 7 days">
         <h2 className="font-semibold">Activity — last 7 days</h2>
-        <div className="mt-5 flex h-40 items-end gap-3">
-          {overview.activity.map((day) => {
+        {/* Columns are h-full so the bar's percentage height resolves against a
+            definite height — `items-end` on the row alone collapses it to 0. */}
+        <div className="mt-5 flex h-40 gap-3">
+          {last7.map((day) => {
             const h = Math.round((day.reviews / maxActivity) * 100);
             return (
-              <div key={day.date} className="flex flex-1 flex-col items-center gap-1.5">
+              <div key={day.date} className="flex h-full flex-1 flex-col items-center justify-end gap-1.5">
                 <span className="text-xs font-medium text-muted-foreground">
                   {day.reviews > 0 ? day.reviews : ""}
                 </span>
                 <div
                   className={`w-full rounded-t-md transition-all ${
                     day.reviews > 0
-                      ? "bg-gradient-to-t from-emerald-400 to-emerald-300"
+                      ? "bg-gradient-to-t from-emerald-500 to-emerald-300"
                       : "bg-muted"
                   }`}
                   style={{ height: `${Math.max(h, day.reviews > 0 ? 8 : 3)}%` }}

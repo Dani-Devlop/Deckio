@@ -44,6 +44,12 @@ export interface Card {
   front: string;
   back: string;
   created_at: string;
+  // Spaced-repetition state (read-only, for UI chips):
+  ease: number;
+  interval_days: number;
+  reps: number;
+  lapses: number;
+  due_at: string | null; // null → new card → due immediately
 }
 
 export interface CardInput {
@@ -144,7 +150,7 @@ export interface StatsOverview {
   streak_days: number;
   mastered_cards: number;
   due_cards: number;
-  activity: ActivityDay[];
+  activity: ActivityDay[]; // ascending, window = `days` query param (7 default)
 }
 
 export interface DeckSessionOut {

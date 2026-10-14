@@ -5,6 +5,7 @@ import {
   BookOpen,
   Brain,
   Clock,
+  CopyPlus,
   Loader2,
   MoreVertical,
   Pencil,
@@ -203,18 +204,28 @@ function DeckCard({
   onOpen,
   onStudy,
   onEdit,
+  onDuplicate,
   onDelete,
+  duplicating,
 }: {
   deck: Deck;
   onOpen: () => void;
   onStudy: () => void;
   onEdit: () => void;
+  onDuplicate: () => void;
   onDelete: () => void;
+  duplicating: boolean;
 }) {
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:shadow-md">
       {/* color accent strip */}
       <span className="h-1.5 w-full" style={{ backgroundColor: deck.color }} aria-hidden />
+      {duplicating && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/70 backdrop-blur-[2px]" aria-live="polite">
+          <Loader2 className="h-5 w-5 animate-spin text-amber-500" />
+          <span className="text-sm font-medium text-muted-foreground">Copying cards…</span>
+        </div>
+      )}
       <div className="flex flex-1 flex-col p-5">
         <div className="flex items-start justify-between gap-2">
           <button
@@ -250,6 +261,9 @@ function DeckCard({
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={onEdit}>
                 <Pencil className="h-4 w-4" /> Edit deck
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onDuplicate} disabled={deck.card_count === 0}>
+                <CopyPlus className="h-4 w-4" /> Duplicate
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={onDelete} className="text-rose-600 focus:text-rose-600">
@@ -314,6 +328,7 @@ export function DashboardView() {
   const [editing, setEditing] = useState<Deck | null>(null);
   const [deleting, setDeleting] = useState<Deck | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [duplicating, setDuplicating] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -333,6 +348,31 @@ export function DashboardView() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Keep due counts fresh: poll every 60s and refetch when the tab regains
+  // focus (a 10-min relearn card can come due while the user idles here).
+  useEffect(() => {
+    const interval = window.setInterval(() => void load(), 60_000);
+    const onFocus = () => void load();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [load]);
+
+  async function duplicate(deck: Deck) {
+    setDuplicating(deck.id);
+    try {
+      const copy = await api.decks.duplicate(deck.id);
+      toast.success(`Duplicated “${deck.title}” — ${copy.card_count} cards ready to study`);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Failed to duplicate the deck.");
+    } finally {
+      setDuplicating(null);
+    }
+  }
 
   const visible = useMemo(() => {
     if (!decks) return [];
@@ -496,6 +536,8 @@ export function DashboardView() {
                 setEditing(deck);
                 setFormOpen(true);
               }}
+              onDuplicate={() => void duplicate(deck)}
+              duplicating={duplicating === deck.id}
               onDelete={() => setDeleting(deck)}
             />
           ))}

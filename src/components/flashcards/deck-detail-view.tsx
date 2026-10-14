@@ -6,6 +6,7 @@ import {
   BookOpen,
   Brain,
   Clock,
+  CopyPlus,
   Download,
   FileUp,
   Loader2,
@@ -36,7 +37,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api } from "@/lib/api";
-import { accuracyColor, formatDate, timeAgo } from "@/lib/format";
+import { accuracyColor, dueLabel, formatDate, timeAgo } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
 import type { BulkImportResult, Card, Deck } from "@/lib/types";
 
@@ -367,6 +368,18 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
     }
   }
 
+  /** Duplicate the deck (SRS progress reset) and open the fresh copy. */
+  async function duplicateDeck() {
+    if (!deck) return;
+    try {
+      const copy = await api.decks.duplicate(deck.id);
+      toast.success(`Duplicated “${deck.title}” — ${copy.card_count} cards ready to study`);
+      go("deck", copy.id); // open the copy so the user lands where the action happened
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Failed to duplicate the deck.");
+    }
+  }
+
   if (loadError) {
     return (
       <div className="mx-auto w-full max-w-4xl px-4 py-10">
@@ -472,6 +485,12 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                   <DropdownMenuItem onClick={() => void exportCsv()}>
                     <Download className="h-4 w-4" /> Export CSV
                   </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => void duplicateDeck()}
+                    disabled={empty}
+                  >
+                    <CopyPlus className="h-4 w-4" /> Duplicate deck
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={() => setDeleteDeckOpen(true)}
@@ -561,35 +580,55 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
         </div>
       ) : (
         <ul className="nice-scrollbar mt-4 max-h-[520px] divide-y overflow-y-auto rounded-xl border bg-card">
-          {cards.map((card) => (
-            <li key={card.id} className="group flex items-start justify-between gap-3 px-4 py-3">
-              <button
-                className="min-w-0 flex-1 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
-                onClick={() => {
-                  setEditingCard(card);
-                  setCardFormOpen(true);
-                }}
-                aria-label={`Edit card: ${card.front}`}
-              >
-                <p className="truncate font-medium">{card.front}</p>
-                <p className="mt-0.5 truncate text-sm text-muted-foreground">{card.back}</p>
-              </button>
-              <div className="flex shrink-0 items-center gap-1 pt-0.5">
-                <span className="hidden text-xs text-muted-foreground sm:inline">
-                  {formatDate(card.created_at)}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground"
-                  aria-label={`Delete card: ${card.front}`}
-                  onClick={() => setDeletingCard(card)}
+          {cards.map((card) => {
+            const label = dueLabel(card.due_at); // new | due | in 3d …
+            return (
+              <li key={card.id} className="group flex items-start justify-between gap-3 px-4 py-3">
+                <button
+                  className="min-w-0 flex-1 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                  onClick={() => {
+                    setEditingCard(card);
+                    setCardFormOpen(true);
+                  }}
+                  aria-label={`Edit card: ${card.front}`}
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            </li>
-          ))}
+                  <p className="truncate font-medium">{card.front}</p>
+                  <p className="mt-0.5 truncate text-sm text-muted-foreground">{card.back}</p>
+                </button>
+                <div className="flex shrink-0 items-center gap-2 pt-0.5">
+                  {/* SRS state chip: new / due / scheduled */}
+                  <span
+                    className={`hidden rounded-full px-2 py-0.5 text-[11px] font-semibold sm:inline ${
+                      label === "new"
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400"
+                        : label === "due"
+                          ? "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400"
+                          : "bg-muted text-muted-foreground"
+                    }`}
+                    title={
+                      card.reps > 0
+                        ? `${card.reps} correct rep${card.reps === 1 ? "" : "s"} · ${card.lapses} lapse${card.lapses === 1 ? "" : "s"} · ease ${card.ease.toFixed(2)}`
+                        : "Not studied yet"
+                    }
+                  >
+                    {label}
+                  </span>
+                  <span className="hidden text-xs text-muted-foreground sm:inline">
+                    {formatDate(card.created_at)}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground"
+                    aria-label={`Delete card: ${card.front}`}
+                    onClick={() => setDeletingCard(card)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 

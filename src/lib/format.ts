@@ -49,3 +49,17 @@ export function formatDuration(seconds: number): string {
   const s = Math.round(seconds % 60);
   return `${m}m ${s}s`;
 }
+
+/** Human label for a card's SRS state from its due_at timestamp.
+ * null → "new" (due immediately); past → "due"; future → "in 3d" / "in 12h". */
+export function dueLabel(dueAt: string | null): string {
+  if (!dueAt) return "new";
+  const due = new Date(dueAt).getTime();
+  if (Number.isNaN(due)) return "new";
+  const diff = due - Date.now();
+  if (diff <= 0) return "due";
+  const hours = Math.ceil(diff / 3_600_000);
+  if (hours < 24) return `in ${hours}h`;
+  const days = Math.round(diff / 86_400_000);
+  return `in ${days}d`;
+}

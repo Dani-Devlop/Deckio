@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { BarChart3, Layers, LogOut, Moon, Sun } from "lucide-react";
+import { BarChart3, Layers, LogOut, Moon, Settings, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAppStore } from "@/lib/store";
 
+import { AccountSettingsDialog } from "./account-settings-dialog";
 import { AuthView } from "./auth-view";
 import { DashboardView } from "./dashboard-view";
 import { DeckDetailView } from "./deck-detail-view";
@@ -58,6 +59,7 @@ function ThemeToggle() {
 
 function SiteHeader() {
   const { user, view, go, logout } = useAppStore();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -91,6 +93,9 @@ function SiteHeader() {
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuLabel className="truncate">{user?.email}</DropdownMenuLabel>
               <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
+                <Settings className="h-4 w-4" /> Account settings
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={logout} className="text-rose-600 focus:text-rose-600">
                 <LogOut className="h-4 w-4" /> Log out
               </DropdownMenuItem>
@@ -98,6 +103,11 @@ function SiteHeader() {
           </DropdownMenu>
         </nav>
       </div>
+
+      <AccountSettingsDialog
+        state={settingsOpen ? { open: true } : { open: false }}
+        onOpenChange={setSettingsOpen}
+      />
     </header>
   );
 }
