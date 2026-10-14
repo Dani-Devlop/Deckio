@@ -2,13 +2,22 @@
 
 Flow:
     POST /decks/{id}/quiz/start   → builds N questions, each with 4 options
-                                     (1 correct + 3 random distractors)
+                                     (1 correct + 3 random distractors);
+                                     optional `?timed_seconds=` budget
     POST /quiz/answer             → validates an answer, stores the review
-    GET  /quiz/{session_id}/result → score, duration and per-question breakdown
+    GET  /quiz/{session_id}/result → score, duration and per-question breakdown;
+                                     `?finish=true` closes the session even
+                                     with questions left (used when a timed
+                                     quiz expires)
 
 Distractor strategy: sample 3 other answers **from the same deck** first; if
 the deck is small, top the pool up with answers from the user's other decks.
 The correct answer is never sent to the client before it is answered.
+
+Timed mode: `timed_seconds` (10–1800) is stored on the session and echoed to
+the client, which runs the countdown and calls the result endpoint with
+`finish=true` when time runs out so the score/duration reflect the real
+elapsed time.
 """
 
 import random
@@ -36,7 +45,7 @@ router = APIRouter(tags=["Quiz"])
     "/decks/{deck_id}/quiz/start",
     response_model=QuizStartOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Start a quiz session (4 options per card, configurable answer direction)",
+    summary="Start a quiz session (4 options per card, configurable answer direction, optional time limit)",
 )
 async def start_quiz(
     deck: Deck = Depends(get_owned_deck),
@@ -50,6 +59,12 @@ async def start_quiz(
             "Which side is the question: 'deck' = use the deck's saved "
             "quiz_answer_side, otherwise force 'front' or 'back'"
         ),
+    ),
+    timed_seconds: int | None = Query(
+        default=None,
+        ge=10,
+        le=1800,
+        description="Total time budget for the whole quiz in seconds; omit for untimed",
     ),
 ) -> QuizStartOut:
     cards = (await db.scalars(select(Card).where(Card.deck_id == deck.id))).all()
@@ -112,12 +127,15 @@ async def start_quiz(
 
     # Remember the resolved direction on the session so /quiz/answer and
     # /quiz/result keep grading the right side (even across restarts).
+    # An optional time budget (timed quiz) is stored alongside it; NULL =
+    # untimed, the client just plays without a countdown.
     session = StudySession(
         user_id=user.id,
         deck_id=deck.id,
         mode="quiz",
         total_planned=len(questions),
         quiz_direction=effective,
+        time_limit_seconds=timed_seconds,
     )
     db.add(session)
     await db.commit()
@@ -128,6 +146,7 @@ async def start_quiz(
         deck_id=deck.id,
         total_questions=len(questions),
         direction=effective,
+        timed_seconds=timed_seconds,
         questions=questions,
     )
 
@@ -214,11 +233,15 @@ async def answer_quiz_question(
 @router.get(
     "/quiz/{session_id}/result",
     response_model=QuizResultOut,
-    summary="Full result breakdown for a finished quiz session",
+    summary="Full result breakdown for a quiz session (?finish=true closes it early)",
 )
 async def quiz_result(
     session: StudySession = Depends(get_owned_session),
     db: AsyncSession = Depends(get_db),
+    finish: bool = Query(
+        default=False,
+        description="Close the session even if questions remain unanswered (used when a timed quiz expires)",
+    ),
 ) -> QuizResultOut:
     if session.mode != "quiz":
         raise HTTPException(
@@ -258,9 +281,12 @@ async def quiz_result(
     )
     total = int(total or 0)
 
-    # Close the session if every question was answered.
+    # Close the session either on request (`?finish=true` — the timed-quiz
+    # client calls this when the countdown expires) or when every planned
+    # question has been answered. Only ever set when still NULL, so repeated
+    # result calls stay idempotent and never move finished_at forward.
     now = utcnow()
-    if answered >= total and session.finished_at is None:
+    if session.finished_at is None and (finish or answered >= total):
         session.finished_at = now
         await db.commit()
 
@@ -287,5 +313,6 @@ async def quiz_result(
         accuracy=round(correct / answered * 100, 1) if answered else 0.0,
         duration_seconds=round((ended - started).total_seconds(), 1),
         finished_at=session.finished_at,
+        time_limit_seconds=session.time_limit_seconds,
         details=details,
     )

@@ -79,6 +79,10 @@ async def run_startup_migrations() -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE study_sessions ADD COLUMN quiz_direction VARCHAR(5)"
             )
+        if "time_limit_seconds" not in session_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE study_sessions ADD COLUMN time_limit_seconds INTEGER"
+            )
 
         user_cols = {c["name"] for c in insp.get_columns("users")}
         if "daily_goal" not in user_cols:

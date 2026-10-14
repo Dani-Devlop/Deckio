@@ -366,6 +366,9 @@ class QuizStartOut(BaseModel):
     # question shows card.front and answers are backs; "back" is the mirror)
     # so the client knows which side to reveal as the answer.
     direction: str = "front"
+    # Total time budget for the whole quiz in seconds as chosen at start;
+    # None = untimed (the client runs the countdown from this).
+    timed_seconds: int | None = None
     questions: list[QuizQuestion]
 
 
@@ -402,6 +405,9 @@ class QuizResultOut(BaseModel):
     accuracy: float
     duration_seconds: float
     finished_at: datetime | None
+    # Time budget the session was started with (mirrors QuizStartOut
+    # .timed_seconds); None = untimed.
+    time_limit_seconds: int | None = None
     details: list[QuizResultItem]
 
 
@@ -422,6 +428,9 @@ class StatsOverview(BaseModel):
     correct_reviews: int
     accuracy: float | None
     streak_days: int
+    # Longest run of consecutive calendar days with ≥1 review across ALL
+    # history (streak_days only counts the run ending today/yesterday).
+    longest_streak_days: int
     mastered_cards: int
     due_cards: int
     # Daily goal ring: reviews completed today (UTC) vs the user's goal.

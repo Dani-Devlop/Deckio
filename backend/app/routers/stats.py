@@ -96,6 +96,27 @@ def _streak_days(review_dates: set[date]) -> int:
     return streak
 
 
+def _longest_streak(review_dates: set[date]) -> int:
+    """Longest run of consecutive calendar days with ≥1 review, ever.
+
+    Unlike `_streak_days` (which only walks backwards from today/yesterday),
+    this scans the WHOLE history: sort the distinct review dates, then walk
+    them counting runs where each date is exactly one day after the previous
+    one. Empty input → 0. Always ≥ `_streak_days` for the same input, since
+    the current streak is itself one of the historical runs.
+    """
+    if not review_dates:
+        return 0
+    longest = 0
+    run = 0
+    prev: date | None = None
+    for day in sorted(review_dates):
+        run = run + 1 if prev is not None and (day - prev).days == 1 else 1
+        longest = max(longest, run)
+        prev = day
+    return longest
+
+
 @router.get("/overview", response_model=StatsOverview, summary="Global learning statistics")
 async def stats_overview(
     user: User = Depends(get_current_user),
@@ -186,6 +207,9 @@ async def stats_overview(
         correct_reviews=correct_reviews,
         accuracy=round(correct_reviews / total_reviews * 100, 1) if total_reviews else None,
         streak_days=_streak_days(set(counts.keys())),
+        # counts covers ALL history (only the `activity` list is windowed),
+        # so its date keys are the full set of days with ≥1 review.
+        longest_streak_days=_longest_streak(set(counts.keys())),
         mastered_cards=mastered,
         due_cards=int(due_cards or 0),
         # Daily-goal ring inputs: reviews logged today (UTC) vs the user's goal.

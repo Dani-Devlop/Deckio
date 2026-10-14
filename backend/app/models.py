@@ -147,6 +147,11 @@ class StudySession(Base):
     # /quiz/result grade the right side even after a server restart;
     # NULL = legacy session (treated as "front").
     quiz_direction: Mapped[str | None] = mapped_column(String(5), default=None)
+    # For quiz sessions: optional total time budget in seconds chosen at quiz
+    # start (10–1800); NULL = untimed. The client renders a countdown and
+    # calls /quiz/{id}/result?finish=true when it expires — that closes the
+    # session so duration_seconds reflects the real elapsed time.
+    time_limit_seconds: Mapped[int | None] = mapped_column(default=None)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
