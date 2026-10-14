@@ -1,0 +1,53 @@
+# Deckio — full stack: PostgreSQL + FastAPI + Next.js
+#
+#   docker compose up --build
+#   web  → http://localhost:3000
+#   api  → http://localhost:8000  (Swagger UI at /docs)
+name: deckio
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: deckio
+      POSTGRES_PASSWORD: deckio
+      POSTGRES_DB: deckio
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deckio -d deckio"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://deckio:deckio@db:5432/deckio
+      # Override in production: SECRET_KEY must be a long random string!
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      CORS_ORIGINS: "*"
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Baked into the client bundle at build time. This is where the
+        # browser fetches the API from — keep it reachable from YOUR machine.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
+volumes:
+  pgdata:
