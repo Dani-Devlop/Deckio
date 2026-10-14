@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Lightbulb, Loader2, RotateCcw, Sparkles, Trophy, X } from "lucide-react";
+import { ArrowLeft, Check, Keyboard, Lightbulb, Loader2, RotateCcw, Sparkles, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import type { StudyNext, StudyStart } from "@/lib/types";
 import type { ReviewResult } from "@/lib/types";
 
 import { CardImage } from "./card-image";
+import { ShortcutsDialog, shortcutBlocked } from "./shortcuts-dialog";
 
 /** Self-paced study mode: flip card → self-grade (Again / Got it). */
 export function StudyView({ deckId }: { deckId: number }) {
@@ -29,6 +30,7 @@ export function StudyView({ deckId }: { deckId: number }) {
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [hintShown, setHintShown] = useState(false); // per-card, reset on next
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
@@ -84,13 +86,21 @@ export function StudyView({ deckId }: { deckId: number }) {
     [busy, current, deckId, session]
   );
 
-  // ---- Keyboard shortcuts: Space = flip, 1 = again, 2 = got it ----
+  // ---- Keyboard shortcuts: Space/Enter = flip (question side) or "Got it"
+  // (answer side), 1 = again, 2 = got it, "?" = shortcut cheat sheet. ----
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (phaseRef.current !== "playing") return;
-      if (e.code === "Space" || e.key === "Enter") {
+      if (shortcutBlocked(e)) return;
+      if (e.key === "?") {
         e.preventDefault();
-        setFlipped((f) => !f);
+        setShortcutsOpen((o) => !o);
+        return;
+      }
+      if (e.code === "Space" || e.key === "Enter") {
+        e.preventDefault(); // keep Space from scrolling the page
+        if (flipped) void review("correct");
+        else setFlipped(true);
       } else if (e.key === "1" || e.key === "ArrowLeft") {
         if (flipped) void review("wrong");
       } else if (e.key === "2" || e.key === "ArrowRight") {
@@ -189,6 +199,7 @@ export function StudyView({ deckId }: { deckId: number }) {
             View stats
           </Button>
         </div>
+        <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} mode="study" />
       </div>
     );
   }
@@ -200,9 +211,21 @@ export function StudyView({ deckId }: { deckId: number }) {
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-8">
-      <Button variant="ghost" onClick={() => go("deck", deckId)} className="mb-3 gap-1.5">
-        <ArrowLeft className="h-4 w-4" /> End session
-      </Button>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <Button variant="ghost" onClick={() => go("deck", deckId)} className="gap-1.5">
+          <ArrowLeft className="h-4 w-4" /> End session
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setShortcutsOpen(true)}
+          aria-label="Keyboard shortcuts"
+          title="Keyboard shortcuts (?)"
+          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+        >
+          <Keyboard className="h-4 w-4" />
+        </Button>
+      </div>
 
       {/* ---------- Progress ---------- */}
       <div className="flex items-center gap-3">
@@ -305,33 +328,40 @@ export function StudyView({ deckId }: { deckId: number }) {
         </div>
       )}
 
-      {/* ---------- Grade buttons ---------- */}
+      {/* ---------- Grade buttons (keyboard: 1 = again, 2 = got it) ---------- */}
       <div className="mt-6 grid grid-cols-2 gap-3">
         <Button
           variant="outline"
           size="lg"
           disabled={!flipped || busy}
           onClick={() => void review("wrong")}
-          className="gap-2 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-500/10"
+          className="h-11 gap-2 border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:hover:bg-rose-500/10"
         >
           <X className="h-5 w-5" /> Again
-          <kbd className="ml-1 hidden rounded border bg-muted px-1.5 text-xs sm:inline">1</kbd>
+          <kbd className="ml-1 hidden rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground sm:inline">
+            1
+          </kbd>
         </Button>
         <Button
           size="lg"
           disabled={!flipped || busy}
           onClick={() => void review("correct")}
-          className="gap-2 bg-emerald-500 text-white hover:bg-emerald-600"
+          className="h-11 gap-2 bg-emerald-500 text-white hover:bg-emerald-600"
         >
           {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Check className="h-5 w-5" />} Got it
-          <kbd className="ml-1 hidden rounded bg-white/20 px-1.5 text-xs sm:inline">2</kbd>
+          <kbd className="ml-1 hidden rounded border border-white/40 bg-white/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white/90 sm:inline">
+            2
+          </kbd>
         </Button>
       </div>
       <p className="mt-3 text-center text-xs text-muted-foreground">
         Reviews save automatically · Keyboard: <kbd className="rounded border bg-muted px-1">Space</kbd> flip,{" "}
         <kbd className="rounded border bg-muted px-1">1</kbd> again,{" "}
-        <kbd className="rounded border bg-muted px-1">2</kbd> got it
+        <kbd className="rounded border bg-muted px-1">2</kbd> got it,{" "}
+        <kbd className="rounded border bg-muted px-1">?</kbd> all shortcuts
       </p>
+
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} mode="study" />
     </div>
   );
 }

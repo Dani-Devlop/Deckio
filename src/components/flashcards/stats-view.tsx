@@ -329,9 +329,26 @@ export function StatsView() {
         <ArrowLeft className="h-4 w-4" /> All decks
       </Button>
       <div className="flex items-center justify-between gap-3">
-        <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-          <LineChart className="h-6 w-6 text-amber-500" /> Learning stats
-        </h1>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+            <LineChart className="h-6 w-6 text-amber-500" /> Learning stats
+          </h1>
+          {(overview.streak_days > 0 || overview.longest_streak_days > 0) && (
+            <motion.span
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              title="Consecutive days with at least one review"
+              className="flex items-center gap-1.5 rounded-full bg-gradient-to-r from-amber-500/15 to-orange-500/15 px-3 py-1 text-xs font-semibold text-amber-600 dark:text-amber-400"
+            >
+              <Flame className="h-3.5 w-3.5 fill-current" />
+              {overview.streak_days}-day streak
+              {overview.streak_days > 0 && overview.longest_streak_days > overview.streak_days && (
+                <span className="font-normal opacity-75">· best {overview.longest_streak_days}</span>
+              )}
+            </motion.span>
+          )}
+        </div>
         <Button
           variant="outline"
           size="sm"

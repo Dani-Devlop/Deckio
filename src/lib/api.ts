@@ -219,10 +219,11 @@ export const api = {
 
   // ---- Quiz ----
   quiz: {
-    start: (deckId: number, limit?: number, direction?: QuizDirection) => {
+    start: (deckId: number, limit?: number, direction?: QuizDirection, timedSeconds?: number) => {
       const sp = new URLSearchParams();
       if (limit) sp.set("limit", String(limit));
       if (direction) sp.set("direction", direction);
+      if (timedSeconds) sp.set("timed_seconds", String(timedSeconds)); // whole-quiz budget (omit = untimed)
       const qs = sp.toString();
       return request<QuizStart>("POST", `/api/decks/${deckId}/quiz/start${qs ? `?${qs}` : ""}`);
     },
@@ -232,7 +233,10 @@ export const api = {
         card_id: cardId,
         answer,
       }),
-    result: (sessionId: number) => request<QuizResult>("GET", `/api/quiz/${sessionId}/result`),
+    /** Fetch the result breakdown. `finish: true` closes an unfinished session
+     * server-side (used when a timed quiz hits its deadline). */
+    result: (sessionId: number, opts?: { finish?: boolean }) =>
+      request<QuizResult>("GET", `/api/quiz/${sessionId}/result${opts?.finish ? "?finish=true" : ""}`),
   },
 
   // ---- Stats ----

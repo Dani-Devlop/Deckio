@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Brain, Check, Lightbulb, Loader2, RotateCcw, Settings2, Trophy, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Brain, Check, Keyboard, Lightbulb, Loader2, RotateCcw, Settings2, Timer, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,9 +15,55 @@ import { useAppStore } from "@/lib/store";
 import type { QuizResult, QuizStart } from "@/lib/types";
 
 import { CardImage } from "./card-image";
+import { ShortcutsDialog, shortcutBlocked } from "./shortcuts-dialog";
 
 const QUIZ_LENGTHS = [5, 10, 15] as const;
 const OPTION_LETTERS = ["A", "B", "C", "D", "E", "F"] as const;
+
+/** Whole-quiz time budget options (value = `timed_seconds`, null = untimed). */
+const TIMER_OPTIONS: { value: number | null; label: string }[] = [
+  { value: null, label: "Off" },
+  { value: 30, label: "30s" },
+  { value: 60, label: "60s" },
+  { value: 120, label: "120s" },
+  { value: 300, label: "300s" },
+];
+
+/** Countdown chip tone by remaining fraction: emerald ≥50%, amber 20–50%, rose <20%. */
+function timerTone(frac: number): string {
+  if (frac >= 0.5)
+    return "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-300";
+  if (frac >= 0.2)
+    return "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300";
+  return "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300";
+}
+
+function timerBarColor(frac: number): string {
+  if (frac >= 0.5) return "bg-emerald-500";
+  if (frac >= 0.2) return "bg-amber-500";
+  return "bg-rose-500";
+}
+
+/** Compact mm:ss countdown chip with a Timer icon; pulses under 10s. */
+function TimerChip({ remainingMs, totalMs }: { remainingMs: number; totalMs: number }) {
+  const frac = totalMs > 0 ? Math.max(0, Math.min(1, remainingMs / totalMs)) : 0;
+  const secs = Math.max(0, Math.ceil(remainingMs / 1000));
+  const mm = String(Math.floor(secs / 60)).padStart(2, "0");
+  const ss = String(secs % 60).padStart(2, "0");
+  return (
+    <span
+      role="timer"
+      aria-label={`Time remaining ${mm}:${ss}`}
+      title="Time remaining for this quiz"
+      className={`flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs font-bold tabular-nums ${timerTone(frac)} ${
+        remainingMs <= 10_000 ? "animate-pulse" : ""
+      }`}
+    >
+      <Timer className="h-3.5 w-3.5" />
+      {mm}:{ss}
+    </span>
+  );
+}
 
 /** Animated SVG accuracy ring around the result trophy (emerald ≥80, amber ≥50, rose below). */
 function ScoreRing({ pct }: { pct: number }) {
@@ -78,6 +125,18 @@ export function QuizView({ deckId }: { deckId: number }) {
   const [deckDefault, setDeckDefault] = useState<number | null>(null);
   const [direction, setDirection] = useState<"front" | "back">("front");
 
+  // Timed mode — whole-quiz budget in seconds (null = untimed). Persists on retry.
+  const [timedSeconds, setTimedSeconds] = useState<number | null>(null);
+  const [remainingMs, setRemainingMs] = useState(0);
+  const [timeUp, setTimeUp] = useState(false); // deadline hit → "Time's up" result treatment
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const timedOutRef = useRef(false); // blocks interactions once the deadline fired
+  const completingRef = useRef(false); // blocks the timeout path once the final result fetch began
+  const phaseRef = useRef(phase);
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
   useEffect(() => {
     let cancelled = false;
     api.decks
@@ -98,11 +157,12 @@ export function QuizView({ deckId }: { deckId: number }) {
   }, [deckId]);
 
   const fetchQuiz = useCallback(
-    async (count: number | null, dir: "front" | "back") => {
+    async (count: number | null, dir: "front" | "back", timed: number | null) => {
       // Fetches questions; all setState calls run after the await resolves.
       try {
-        const q = await api.quiz.start(deckId, count ?? undefined, dir);
+        const q = await api.quiz.start(deckId, count ?? undefined, dir, timed ?? undefined);
         setQuiz(q);
+        setRemainingMs(q.timed_seconds != null ? q.timed_seconds * 1000 : 0); // full budget to start
         setPhase("playing");
       } catch (e) {
         setMessage(e instanceof ApiError ? e.message : "Failed to start the quiz.");
@@ -112,7 +172,7 @@ export function QuizView({ deckId }: { deckId: number }) {
     [deckId]
   );
 
-  /** Full reset + restart with the current length (Retry button — an event handler). */
+  /** Full reset + restart with the current options (Retry button — an event handler). */
   const startQuiz = useCallback(() => {
     setResult(null);
     setIndex(0);
@@ -120,10 +180,14 @@ export function QuizView({ deckId }: { deckId: number }) {
     setCorrectAnswer(null);
     setAnsweredCount(0);
     setCorrectCount(0);
+    setHintShown(false);
     advancing.current = false;
+    timedOutRef.current = false;
+    completingRef.current = false;
+    setTimeUp(false);
     setPhase("loading");
-    void fetchQuiz(limit, direction);
-  }, [fetchQuiz, limit, direction]);
+    void fetchQuiz(limit, direction, timedSeconds); // timer + direction + length all persist on retry
+  }, [fetchQuiz, limit, direction, timedSeconds]);
 
   /** Back to the length picker. */
   const backToSetup = useCallback(() => {
@@ -134,18 +198,22 @@ export function QuizView({ deckId }: { deckId: number }) {
     setCorrectAnswer(null);
     setAnsweredCount(0);
     setCorrectCount(0);
+    setTimeUp(false);
+    timedOutRef.current = false;
+    completingRef.current = false;
     setPhase("setup");
   }, []);
 
   // ---- Answer the current question, show feedback, then advance ----
   async function choose(option: string) {
-    if (!quiz || selected !== null || advancing.current) return;
+    if (!quiz || selected !== null || advancing.current || timedOutRef.current) return;
     const q = quiz.questions[index];
     if (!q) return;
 
     setSelected(option);
     try {
       const res = await api.quiz.answer(quiz.session_id, q.card_id, option);
+      if (timedOutRef.current) return; // deadline hit while the answer was in flight
       setCorrectAnswer(res.correct_answer);
       setAnsweredCount(res.answered);
       if (res.correct) setCorrectCount((c) => c + 1);
@@ -153,8 +221,10 @@ export function QuizView({ deckId }: { deckId: number }) {
       advancing.current = true;
       setTimeout(async () => {
         advancing.current = false;
+        if (timedOutRef.current) return; // the timeout path owns the session now
         if (index + 1 >= quiz.questions.length) {
           // All questions answered — fetch the full result breakdown.
+          completingRef.current = true; // tell the timeout path to stand down
           try {
             const r = await api.quiz.result(quiz.session_id);
             setResult(r);
@@ -171,10 +241,70 @@ export function QuizView({ deckId }: { deckId: number }) {
         }
       }, res.correct ? 750 : 1300);
     } catch (e) {
+      if (timedOutRef.current) return;
       setSelected(null);
       toast.error(e instanceof ApiError ? e.message : "Failed to submit the answer");
     }
   }
+
+  /** Deadline hit: close the session server-side (finish=true) and jump to the
+   * result screen with the "Time's up" treatment. Safe from any play state —
+   * idle, mid-reveal or mid-advance. */
+  const finishByTimeout = useCallback(async () => {
+    if (!quiz || timedOutRef.current || completingRef.current) return;
+    timedOutRef.current = true;
+    if (phaseRef.current !== "playing") return;
+    setTimeUp(true);
+    setSelected(null);
+    setCorrectAnswer(null);
+    try {
+      const r = await api.quiz.result(quiz.session_id, { finish: true });
+      setResult(r);
+      setPhase("done");
+    } catch {
+      toast.error("Failed to load the quiz result");
+      setPhase("error");
+    }
+  }, [quiz]);
+
+  // ---- Whole-quiz countdown (timed mode only) ----
+  useEffect(() => {
+    if (phase !== "playing" || quiz?.timed_seconds == null) return;
+    const totalMs = quiz.timed_seconds * 1000;
+    const deadline = Date.now() + totalMs;
+    const iv = setInterval(() => {
+      const left = Math.max(0, deadline - Date.now());
+      // Tick state roughly once per second (display granularity) to keep renders cheap.
+      setRemainingMs((prev) => (Math.ceil(prev / 1000) !== Math.ceil(left / 1000) ? left : prev));
+      if (left <= 0) {
+        clearInterval(iv);
+        void finishByTimeout();
+      }
+    }, 250);
+    // Cleanup also covers unmount and finish-by-answering (phase leaves "playing").
+    return () => clearInterval(iv);
+  }, [phase, quiz, finishByTimeout]);
+
+  // ---- Keyboard: 1–4 pick an option, "?" toggles the shortcut cheat sheet ----
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (shortcutBlocked(e)) return;
+      if (e.key === "?") {
+        e.preventDefault();
+        setShortcutsOpen((o) => !o);
+        return;
+      }
+      if (phaseRef.current !== "playing") return;
+      const n = Number(e.key);
+      if (!Number.isInteger(n) || n < 1 || n > 4) return;
+      const option = quiz?.questions[index]?.options[n - 1];
+      if (option == null) return;
+      e.preventDefault();
+      void choose(option); // choose() re-checks the answered/disabled guards
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   // ---- Setup screen: pick how many questions + answer direction ----
   if (phase === "setup") {
@@ -186,9 +316,21 @@ export function QuizView({ deckId }: { deckId: number }) {
 
     return (
       <div className="mx-auto w-full max-w-xl px-4 py-10">
-        <Button variant="ghost" onClick={() => go("deck", deckId)} className="mb-4 gap-1.5">
-          <ArrowLeft className="h-4 w-4" /> Back to deck
-        </Button>
+        <div className="mb-4 flex items-center justify-between gap-2">
+          <Button variant="ghost" onClick={() => go("deck", deckId)} className="gap-1.5">
+            <ArrowLeft className="h-4 w-4" /> Back to deck
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setShortcutsOpen(true)}
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts (?)"
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+          >
+            <Keyboard className="h-4 w-4" />
+          </Button>
+        </div>
 
         <div className="rounded-2xl border bg-card p-8 text-center shadow-sm">
           <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-md">
@@ -301,19 +443,49 @@ export function QuizView({ deckId }: { deckId: number }) {
               : "You'll see the front of each card and pick the matching back"}
           </p>
 
+          <p className="mt-5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Timer
+          </p>
+          <div
+            className="mt-2 flex flex-wrap items-center justify-center gap-2"
+            role="radiogroup"
+            aria-label="Quiz timer"
+          >
+            {TIMER_OPTIONS.map((opt) => (
+              <button
+                key={opt.label}
+                type="button"
+                role="radio"
+                aria-checked={timedSeconds === opt.value}
+                onClick={() => setTimedSeconds(opt.value)}
+                className={`flex h-9 items-center gap-1.5 rounded-full border px-4 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+                  timedSeconds === opt.value
+                    ? "border-amber-400 bg-amber-50 text-amber-800 shadow-sm dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300"
+                    : "border-border bg-card text-muted-foreground hover:border-amber-300 hover:text-foreground"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Time budget for the whole quiz — when it hits zero the quiz ends automatically
+          </p>
+
           <Button
             onClick={() => {
               setPhase("loading");
-              void fetchQuiz(limit, direction);
+              void fetchQuiz(limit, direction, timedSeconds);
             }}
             className="mt-6 h-11 w-full gap-2 bg-amber-500 text-base text-white hover:bg-amber-600"
           >
             <Brain className="h-5 w-5" /> Start quiz
           </Button>
           <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-            <Settings2 className="h-3 w-3" /> You can retry or change the length after the quiz
+            <Settings2 className="h-3 w-3" /> You can retry or change the options after the quiz
           </p>
         </div>
+        <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} mode="quiz" />
       </div>
     );
   }
@@ -360,6 +532,19 @@ export function QuizView({ deckId }: { deckId: number }) {
           <p className="mt-1 text-muted-foreground">
             {scorePct}% accuracy · finished in {formatDuration(result.duration_seconds)}
           </p>
+          {result.time_limit_seconds != null && (
+            <Badge
+              variant="outline"
+              className="mt-3 gap-1 border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300"
+            >
+              <Timer className="h-3 w-3" /> Timed · {result.time_limit_seconds}s
+            </Badge>
+          )}
+          {timeUp && (
+            <p className="mt-2 text-sm font-medium text-rose-600">
+              Time&apos;s up — you answered {result.answered} of {result.total}.
+            </p>
+          )}
         </div>
 
         {/* Per-question breakdown */}
@@ -411,29 +596,56 @@ export function QuizView({ deckId }: { deckId: number }) {
             View stats
           </Button>
         </div>
+        <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} mode="quiz" />
       </div>
     );
   }
 
   const q = quiz?.questions[index];
   const total = quiz?.total_questions ?? 0;
+  const totalMs = quiz?.timed_seconds != null ? quiz.timed_seconds * 1000 : null;
+  const frac = totalMs ? Math.max(0, Math.min(1, remainingMs / totalMs)) : 0;
 
   return (
     <div className="mx-auto w-full max-w-2xl px-4 py-8">
-      <Button variant="ghost" onClick={() => go("deck", deckId)} className="mb-3 gap-1.5">
-        <ArrowLeft className="h-4 w-4" /> Quit quiz
-      </Button>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <Button variant="ghost" onClick={() => go("deck", deckId)} className="gap-1.5">
+          <ArrowLeft className="h-4 w-4" /> Quit quiz
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setShortcutsOpen(true)}
+          aria-label="Keyboard shortcuts"
+          title="Keyboard shortcuts (?)"
+          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+        >
+          <Keyboard className="h-4 w-4" />
+        </Button>
+      </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
+        {totalMs != null && <TimerChip remainingMs={remainingMs} totalMs={totalMs} />}
         <Progress
           value={total ? (answeredCount / total) * 100 : 0}
-          className="h-2 flex-1"
+          className="h-2 min-w-0 flex-1"
           aria-label="Quiz progress"
         />
         <span className="shrink-0 text-sm font-medium text-muted-foreground">
           {Math.min(index + 1, total)}/{total}
         </span>
       </div>
+      {totalMs != null && (
+        <div
+          className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted"
+          aria-hidden
+        >
+          <div
+            className={`h-full rounded-full ${timerBarColor(frac)}`}
+            style={{ width: `${(frac * 100).toFixed(2)}%`, transition: "width 300ms linear" }}
+          />
+        </div>
+      )}
 
       {/* ---------- Question ---------- */}
       <div className="mt-6 rounded-2xl border bg-card p-6 text-center shadow-sm sm:p-8">
@@ -487,7 +699,7 @@ export function QuizView({ deckId }: { deckId: number }) {
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.2, delay: i * 0.03, ease: "easeOut" }}
               onClick={() => void choose(option)}
-              disabled={selected !== null}
+              disabled={selected !== null || timeUp}
               className={`flex min-h-14 items-center gap-3 rounded-xl border p-4 text-left text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
                 showCorrect
                   ? "border-emerald-400 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-300"
@@ -514,8 +726,14 @@ export function QuizView({ deckId }: { deckId: number }) {
 
       <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs text-muted-foreground">
         <Loader2 className={`h-3 w-3 ${selected !== null ? "animate-spin" : "invisible"}`} />
-        {selected !== null ? "Checking…" : "Pick the answer you think is correct"}
+        {selected !== null
+          ? "Checking…"
+          : timeUp
+            ? "Time's up — loading results…"
+            : "Pick the answer you think is correct"}
       </p>
+
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} mode="quiz" />
     </div>
   );
 }

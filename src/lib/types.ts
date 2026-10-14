@@ -196,6 +196,7 @@ export interface QuizStart {
   mode: string;
   total_questions: number;
   direction: "front" | "back"; // which card side the question shows
+  timed_seconds: number | null; // whole-quiz time budget (null = untimed)
   questions: QuizQuestion[];
 }
 
@@ -225,6 +226,7 @@ export interface QuizResult {
   wrong: number;
   accuracy: number;
   duration_seconds: number;
+  time_limit_seconds: number | null; // budget the quiz was started with (null = untimed)
   finished_at: string | null;
   details: QuizResultItem[];
 }
@@ -244,6 +246,7 @@ export interface StatsOverview {
   correct_reviews: number;
   accuracy: number | null;
   streak_days: number;
+  longest_streak_days: number; // best streak ever (0 when there are no reviews)
   mastered_cards: number;
   due_cards: number;
   today_reviews: number; // reviews completed today (UTC) — goal ring progress
