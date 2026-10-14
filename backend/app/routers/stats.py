@@ -1,0 +1,257 @@
+"""Learning statistics & analytics.
+
+All endpoints are user-scoped (reviews are joined through study sessions to
+enforce ownership). Aggregations happen in SQL; only small post-processing
+(streak / activity fill / accuracy math) happens in Python.
+"""
+
+from datetime import date, datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends
+from sqlalchemy import case, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..database import get_db
+from ..deps import get_current_user, get_owned_deck
+from ..models import Card, CardReview, Deck, StudySession, User
+from ..schemas import (
+    ActivityDay,
+    DeckSessionOut,
+    DeckStatsOut,
+    StatsOverview,
+    WeakCardOut,
+)
+
+router = APIRouter(prefix="/stats", tags=["Stats"])
+
+MASTERED_MIN_REVIEWS = 3
+MASTERED_MIN_ACCURACY = 0.8
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Normalize possibly-naive (SQLite) datetimes to timezone-aware UTC."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def _streak_days(review_dates: set[date]) -> int:
+    """Count consecutive days ending today (or yesterday, for grace) backwards."""
+    if not review_dates:
+        return 0
+    today = datetime.now(timezone.utc).date()
+    cursor = today if today in review_dates else today - timedelta(days=1)
+    streak = 0
+    while cursor in review_dates:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
+@router.get("/overview", response_model=StatsOverview, summary="Global learning statistics")
+async def stats_overview(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StatsOverview:
+    total_decks = await db.scalar(
+        select(func.count()).select_from(Deck).where(Deck.user_id == user.id)
+    )
+    total_cards = await db.scalar(
+        select(func.count())
+        .select_from(Card)
+        .join(Deck, Deck.id == Card.deck_id)
+        .where(Deck.user_id == user.id)
+    )
+    total_sessions = await db.scalar(
+        select(func.count()).select_from(StudySession).where(StudySession.user_id == user.id)
+    )
+
+    # All reviews of this user, with timestamps for the activity chart / streak.
+    review_rows = (
+        await db.execute(
+            select(CardReview.result, CardReview.reviewed_at)
+            .join(StudySession, StudySession.id == CardReview.session_id)
+            .where(StudySession.user_id == user.id)
+        )
+    ).all()
+    total_reviews = len(review_rows)
+    correct_reviews = sum(1 for result, _ in review_rows if result == "correct")
+
+    # ---- Activity: last 7 days (UTC), missing days filled with zeros ----
+    today = datetime.now(timezone.utc).date()
+    counts: dict[date, int] = {}
+    corrects: dict[date, int] = {}
+    for result, reviewed_at in review_rows:
+        day = _as_utc(reviewed_at).date()
+        counts[day] = counts.get(day, 0) + 1
+        if result == "correct":
+            corrects[day] = corrects.get(day, 0) + 1
+    activity = [
+        ActivityDay(
+            date=str(today - timedelta(days=6 - i)),
+            reviews=counts.get(today - timedelta(days=6 - i), 0),
+            correct=corrects.get(today - timedelta(days=6 - i), 0),
+        )
+        for i in range(7)
+    ]
+
+    # ---- Mastered cards: enough reviews AND high accuracy ----
+    per_card = (
+        await db.execute(
+            select(
+                CardReview.card_id,
+                func.count(CardReview.id),
+                func.sum(case((CardReview.result == "correct", 1), else_=0)),
+            )
+            .join(StudySession, StudySession.id == CardReview.session_id)
+            .where(StudySession.user_id == user.id)
+            .group_by(CardReview.card_id)
+        )
+    ).all()
+    mastered = sum(
+        1
+        for _, n, c in per_card
+        if n >= MASTERED_MIN_REVIEWS and (int(c or 0) / n) >= MASTERED_MIN_ACCURACY
+    )
+
+    return StatsOverview(
+        total_decks=int(total_decks or 0),
+        total_cards=int(total_cards or 0),
+        total_sessions=int(total_sessions or 0),
+        total_reviews=total_reviews,
+        correct_reviews=correct_reviews,
+        accuracy=round(correct_reviews / total_reviews * 100, 1) if total_reviews else None,
+        streak_days=_streak_days(set(counts.keys())),
+        mastered_cards=mastered,
+        activity=activity,
+    )
+
+
+@router.get("/decks/{deck_id}", response_model=DeckStatsOut, summary="Per-deck statistics")
+async def deck_stats(
+    deck: Deck = Depends(get_owned_deck),
+    db: AsyncSession = Depends(get_db),
+) -> DeckStatsOut:
+    total_cards = await db.scalar(
+        select(func.count()).select_from(Card).where(Card.deck_id == deck.id)
+    )
+    sessions_count = await db.scalar(
+        select(func.count()).select_from(StudySession).where(StudySession.deck_id == deck.id)
+    )
+
+    review_rows = (
+        await db.execute(
+            select(CardReview.result, CardReview.session_id)
+            .join(StudySession, StudySession.id == CardReview.session_id)
+            .where(StudySession.deck_id == deck.id)
+        )
+    ).all()
+    total_reviews = len(review_rows)
+    correct_reviews = sum(1 for result, _ in review_rows if result == "correct")
+
+    # Weak cards inside this deck: cards with at least one wrong review.
+    weak_cards = await db.scalar(
+        select(func.count(func.distinct(CardReview.card_id)))
+        .join(StudySession, StudySession.id == CardReview.session_id)
+        .where(StudySession.deck_id == deck.id, CardReview.result == "wrong")
+    )
+
+    # Recent sessions with their own accuracy (single grouped query).
+    recent = (
+        (
+            await db.scalars(
+                select(StudySession)
+                .where(StudySession.deck_id == deck.id)
+                .order_by(StudySession.started_at.desc())
+                .limit(5)
+            )
+        )
+        .all()
+    )
+    per_session: dict[int, tuple[int, int]] = {}
+    if recent:
+        rows = await db.execute(
+            select(
+                CardReview.session_id,
+                func.count(CardReview.id),
+                func.sum(case((CardReview.result == "correct", 1), else_=0)),
+            )
+            .where(CardReview.session_id.in_([s.id for s in recent]))
+            .group_by(CardReview.session_id)
+        )
+        for sid, n, c in rows.all():
+            per_session[sid] = (int(n), int(c or 0))
+
+    recent_out = [
+        DeckSessionOut(
+            id=s.id,
+            mode=s.mode,
+            started_at=s.started_at,
+            finished_at=s.finished_at,
+            reviews=per_session.get(s.id, (0, 0))[0],
+            accuracy=(
+                round(per_session[s.id][1] / per_session[s.id][0] * 100, 1)
+                if per_session.get(s.id, (0, 0))[0]
+                else None
+            ),
+        )
+        for s in recent
+    ]
+
+    return DeckStatsOut(
+        deck_id=deck.id,
+        title=deck.title,
+        total_cards=int(total_cards or 0),
+        total_reviews=total_reviews,
+        correct_reviews=correct_reviews,
+        accuracy=round(correct_reviews / total_reviews * 100, 1) if total_reviews else None,
+        sessions_count=int(sessions_count or 0),
+        weak_cards_count=int(weak_cards or 0),
+        last_studied_at=recent[0].started_at if recent else None,
+        recent_sessions=recent_out,
+    )
+
+
+@router.get("/weak-cards", response_model=list[WeakCardOut], summary="Cards the user struggles with")
+async def weak_cards(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[WeakCardOut]:
+    """Cards with at least one wrong review, worst first (max 20)."""
+    rows = (
+        await db.execute(
+            select(
+                Card,
+                Deck.title,
+                func.count(CardReview.id),
+                func.sum(case((CardReview.result == "wrong", 1), else_=0)),
+            )
+            .join(CardReview, CardReview.card_id == Card.id)
+            .join(StudySession, StudySession.id == CardReview.session_id)
+            .join(Deck, Deck.id == Card.deck_id)
+            .where(StudySession.user_id == user.id)
+            .group_by(Card.id, Deck.id)
+            .order_by(
+                func.sum(case((CardReview.result == "wrong", 1), else_=0)).desc(),
+                func.count(CardReview.id).desc(),
+            )
+            .limit(20)
+        )
+    ).all()
+
+    out: list[WeakCardOut] = []
+    for card, deck_title, reviewed, wrong in rows:
+        reviewed, wrong = int(reviewed), int(wrong or 0)
+        if wrong == 0:
+            continue  # ordered by wrong desc — nothing weaker beyond this point
+        out.append(
+            WeakCardOut(
+                card_id=card.id,
+                deck_id=card.deck_id,
+                deck_title=deck_title,
+                front=card.front,
+                back=card.back,
+                times_reviewed=reviewed,
+                times_wrong=wrong,
+                accuracy=round((reviewed - wrong) / reviewed * 100, 1),
+            )
+        )
+    return out
