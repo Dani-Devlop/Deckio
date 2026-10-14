@@ -60,6 +60,7 @@ async def run_startup_migrations() -> None:
             "reps": "ALTER TABLE cards ADD COLUMN reps INTEGER NOT NULL DEFAULT 0",
             "lapses": "ALTER TABLE cards ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0",
             "due_at": "ALTER TABLE cards ADD COLUMN due_at DATETIME",
+            "tags": "ALTER TABLE cards ADD COLUMN tags TEXT",
         }
         for name, ddl in card_additions.items():
             if name not in card_cols:

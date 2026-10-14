@@ -5,10 +5,13 @@ Accepted formats (delimiter auto-detected: comma, semicolon or tab):
     front,back
     "What is ORM?","Object-Relational Mapping"
     What is FastAPI?;A modern async Python web framework
+    hola,hello,vocabulary|basics          ← optional 3rd column = tags
 
-A header row is optional; it is detected when the first two cells are common
-column names (front/back/question/answer/...). Exact duplicate rows within a
-file are silently de-duplicated; invalid rows are reported with row numbers.
+An optional header row is tolerated; it is detected when the first cells are
+column names (front/back/question/answer/tags/...). The optional third column
+holds tags separated by `|` (e.g. `verbs|beginner`). Exact duplicate rows
+within a file are silently de-duplicated; invalid rows are reported with row
+numbers.
 """
 
 import csv
@@ -17,6 +20,8 @@ import io
 MAX_FRONT_LEN = 1000
 MAX_BACK_LEN = 2000
 MAX_ROWS_PER_IMPORT = 1000
+
+CsvCard = tuple[str, str, list[str]]  # (front, back, tags)
 
 _HEADER_TOKENS = {
     "front",
@@ -29,18 +34,19 @@ _HEADER_TOKENS = {
     "translation",
     "prompt",
     "response",
+    "tags",  # optional 3rd column
 }
 
 
-def parse_cards_csv(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
     """Parse raw CSV text into `(cards, errors)`.
 
     Returns:
-        cards:  validated (front, back) tuples, de-duplicated, in file order.
+        cards:  validated (front, back, tags) tuples, de-duplicated, in file order.
         errors: human-readable messages with row numbers for the UI.
     """
     errors: list[str] = []
-    cards: list[tuple[str, str]] = []
+    cards: list[CsvCard] = []
     seen: set[tuple[str, str]] = set()
 
     # Normalize line endings and strip a possible UTF-8 BOM.
@@ -78,11 +84,16 @@ def parse_cards_csv(text: str) -> tuple[list[tuple[str, str]], list[str]]:
             errors.append(f"Row {i}: back exceeds {MAX_BACK_LEN} characters.")
             continue
 
+        # Optional third column: tags separated by `|` inside the cell.
+        tags: list[str] = []
+        if len(row) >= 3:
+            tags = [t.strip() for t in row[2].split("|") if t.strip()]
+
         pair = (front, back)
         if pair in seen:
             continue  # silent duplicate skip
         seen.add(pair)
-        cards.append(pair)
+        cards.append((front, back, tags))
 
     return cards, errors
 

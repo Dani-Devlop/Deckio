@@ -7,7 +7,9 @@ Grouped by domain: Auth, Decks, Cards, Study, Quiz, Stats.
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+
+from .utils.csv_import import MAX_ROWS_PER_IMPORT
 
 # ============================== Auth ==============================
 
@@ -101,10 +103,46 @@ class DeckOut(BaseModel):
 
 # ============================== Cards ==============================
 
+MAX_TAGS_PER_CARD = 8
+MAX_TAG_LENGTH = 32
+
+
+def clean_tags(tags: list[str]) -> list[str]:
+    """Trim tags, drop empties, cap length and de-duplicate (case-insensitive)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in tags:
+        tag = raw.strip()
+        if not tag:
+            continue
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(tag[:MAX_TAG_LENGTH])
+        if len(out) >= MAX_TAGS_PER_CARD:
+            break
+    return out
+
+
+def tags_to_storage(tags: list[str]) -> str | None:
+    """Serialize a clean tag list for the DB column (comma-joined, NULL if empty)."""
+    tags = clean_tags(tags)
+    return ",".join(tags) if tags else None
+
 
 class CardBase(BaseModel):
     front: str = Field(min_length=1, max_length=1000)
     back: str = Field(min_length=1, max_length=2000)
+    tags: list[str] = Field(
+        default_factory=list,
+        description=f"Free-form labels (max {MAX_TAGS_PER_CARD}, {MAX_TAG_LENGTH} chars each)",
+    )
+
+    @field_validator("tags")
+    @classmethod
+    def _clean(cls, v: list[str]) -> list[str]:
+        return clean_tags(v)
 
 
 class CardCreate(CardBase):
@@ -114,6 +152,12 @@ class CardCreate(CardBase):
 class CardUpdate(BaseModel):
     front: str | None = Field(default=None, min_length=1, max_length=1000)
     back: str | None = Field(default=None, min_length=1, max_length=2000)
+    tags: list[str] | None = Field(default=None)
+
+    @field_validator("tags")
+    @classmethod
+    def _clean(cls, v: list[str] | None) -> list[str] | None:
+        return None if v is None else clean_tags(v)
 
 
 class CardOut(BaseModel):
@@ -123,6 +167,7 @@ class CardOut(BaseModel):
     deck_id: int
     front: str
     back: str
+    tags: list[str] = []
     created_at: datetime
     # --- Spaced-repetition state (read-only surface for the web UI) ---
     # due_at == NULL means "new card" → due immediately; otherwise the
@@ -132,6 +177,16 @@ class CardOut(BaseModel):
     reps: int = 0
     lapses: int = 0
     due_at: datetime | None = None
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _split_stored_tags(cls, v: object) -> object:
+        """Accept the raw comma-separated DB string and expose a clean list."""
+        if isinstance(v, str):
+            return [t.strip() for t in v.split(",") if t.strip()]
+        if v is None:
+            return []
+        return v
 
 
 class BulkImportResult(BaseModel):
@@ -283,3 +338,80 @@ class WeakCardOut(BaseModel):
     times_reviewed: int
     times_wrong: int
     accuracy: float
+
+
+# ============================== Search ==============================
+
+
+class SearchCardHit(BaseModel):
+    """One matching card in global search results."""
+
+    card_id: int
+    deck_id: int
+    deck_title: str
+    front: str
+    back: str
+    tags: list[str] = []
+
+
+class SearchResults(BaseModel):
+    """Global search across the user's decks and cards (powers the ⌘K palette)."""
+
+    decks: list[DeckOut]
+    cards: list[SearchCardHit]
+
+
+# ============================== Session history ==============================
+
+
+class SessionSummary(BaseModel):
+    """One study/quiz session for the account-wide history list."""
+
+    id: int
+    deck_id: int
+    deck_title: str
+    mode: str  # "study" | "quiz"
+    srs: bool
+    started_at: datetime
+    finished_at: datetime | None
+    reviews: int
+    correct: int
+    accuracy: float | None
+    duration_seconds: float | None
+
+
+# ============================== Deck bundle (share) ==============================
+
+
+class BundleCardIn(BaseModel):
+    front: str = Field(min_length=1, max_length=1000)
+    back: str = Field(min_length=1, max_length=2000)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("tags")
+    @classmethod
+    def _clean(cls, v: list[str]) -> list[str]:
+        return clean_tags(v)
+
+
+class DeckBundleIn(BaseModel):
+    """Payload for `POST /decks/import` — a previously exported deck bundle."""
+
+    title: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    color: str = Field(default="#f59e0b", pattern=r"^#[0-9a-fA-F]{6}$")
+    icon: str = Field(default="📚", max_length=8)
+    cards: list[BundleCardIn] = Field(min_length=1, max_length=MAX_ROWS_PER_IMPORT)
+
+
+class DeckBundleOut(BaseModel):
+    """Export shape returned by `GET /decks/{id}/bundle` (JSON attachment)."""
+
+    version: int = 1
+    app: str = "deckio"
+    title: str
+    description: str | None
+    color: str
+    icon: str
+    card_count: int
+    cards: list[BundleCardIn]

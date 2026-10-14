@@ -18,6 +18,7 @@ from ..schemas import (
     ActivityDay,
     DeckSessionOut,
     DeckStatsOut,
+    SessionSummary,
     StatsOverview,
     WeakCardOut,
 )
@@ -140,6 +141,63 @@ async def stats_overview(
         due_cards=int(due_cards or 0),
         activity=activity,
     )
+
+
+@router.get("/sessions", response_model=list[SessionSummary], summary="Recent sessions across all decks")
+async def recent_sessions(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=15, ge=1, le=50, description="How many sessions to return"),
+) -> list[SessionSummary]:
+    """Account-wide session history (newest first) with per-session accuracy."""
+    sessions = (
+        await db.execute(
+            select(StudySession, Deck.title)
+            .join(Deck, Deck.id == StudySession.deck_id)
+            .where(StudySession.user_id == user.id)
+            .order_by(StudySession.started_at.desc())
+            .limit(limit)
+        )
+    ).all()
+
+    per_session: dict[int, tuple[int, int]] = {}
+    if sessions:
+        rows = await db.execute(
+            select(
+                CardReview.session_id,
+                func.count(CardReview.id),
+                func.sum(case((CardReview.result == "correct", 1), else_=0)),
+            )
+            .where(CardReview.session_id.in_([s.id for s, _ in sessions]))
+            .group_by(CardReview.session_id)
+        )
+        for sid, n, c in rows.all():
+            per_session[sid] = (int(n), int(c or 0))
+
+    out: list[SessionSummary] = []
+    for s, deck_title in sessions:
+        n, c = per_session.get(s.id, (0, 0))
+        duration = (
+            max(0.0, (_as_utc(s.finished_at) - _as_utc(s.started_at)).total_seconds())
+            if s.finished_at is not None
+            else None
+        )
+        out.append(
+            SessionSummary(
+                id=s.id,
+                deck_id=s.deck_id,
+                deck_title=deck_title,
+                mode=s.mode,
+                srs=s.srs,
+                started_at=s.started_at,
+                finished_at=s.finished_at,
+                reviews=n,
+                correct=c,
+                accuracy=round(c / n * 100, 1) if n else None,
+                duration_seconds=duration,
+            )
+        )
+    return out
 
 
 @router.get("/decks/{deck_id}", response_model=DeckStatsOut, summary="Per-deck statistics")

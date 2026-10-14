@@ -1,6 +1,6 @@
 """Authentication endpoints: register, login, me, password change, account deletion."""
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,8 +16,14 @@ from ..schemas import (
     UserOut,
 )
 from ..security import create_access_token, hash_password, verify_password
+from ..utils.ratelimit import auth_limiter, client_ip
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
+
+async def rate_limit_credentials(request: Request) -> None:
+    """Dependency: brute-force guard on register/login (10 per 5 min per IP)."""
+    auth_limiter.check(f"auth:{client_ip(request)}")
 
 
 @router.post(
@@ -25,6 +31,7 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
     response_model=AuthResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new account",
+    dependencies=[Depends(rate_limit_credentials)],
 )
 async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)) -> AuthResponse:
     """Create a user, hash the password with bcrypt and return a JWT immediately
@@ -46,7 +53,12 @@ async def register(payload: UserCreate, db: AsyncSession = Depends(get_db)) -> A
     return AuthResponse(access_token=create_access_token(user.id), user=UserOut.model_validate(user))
 
 
-@router.post("/login", response_model=AuthResponse, summary="Log in with email + password")
+@router.post(
+    "/login",
+    response_model=AuthResponse,
+    summary="Log in with email + password",
+    dependencies=[Depends(rate_limit_credentials)],
+)
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> AuthResponse:
     """Verify credentials and return a fresh JWT. Invalid creds → 401."""
     email = payload.email.lower().strip()

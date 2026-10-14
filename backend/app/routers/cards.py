@@ -4,7 +4,9 @@ import csv
 import io
 import re
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
+from sqlalchemy import func, or_
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..deps import get_owned_card, get_owned_deck
 from ..models import Card, Deck, User
-from ..schemas import BulkImportResult, CardCreate, CardOut, CardUpdate
+from ..schemas import BulkImportResult, CardCreate, CardOut, CardUpdate, tags_to_storage
 from ..utils.csv_import import MAX_ROWS_PER_IMPORT, parse_cards_csv
 
 router = APIRouter(tags=["Cards"])
@@ -27,17 +29,29 @@ MAX_UPLOAD_BYTES = 1_000_000
 @router.get(
     "/decks/{deck_id}/cards",
     response_model=list[CardOut],
-    summary="List all cards in a deck",
+    summary="List all cards in a deck (optional text search and tag filter)",
 )
 async def list_cards(
     deck: Deck = Depends(get_owned_deck),
     db: AsyncSession = Depends(get_db),
-) -> list[Card]:
-    return (
-        await db.scalars(
-            select(Card).where(Card.deck_id == deck.id).order_by(Card.created_at, Card.id)
-        )
+    q: str | None = Query(default=None, max_length=100, description="Search front/back text"),
+    tag: str | None = Query(default=None, max_length=64, description="Exact tag match (case-insensitive)"),
+) -> list[CardOut]:
+    stmt = select(Card).where(Card.deck_id == deck.id)
+
+    if q:
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(Card.front.ilike(like), Card.back.ilike(like)))
+    if tag:
+        # Tags are stored comma-separated; LIKE with the padded delimiter also
+        # prevents prefix collisions (e.g. tag="verb" must not match "verbs").
+        needle = f"%,{tag.strip().lower()},%"
+        stmt = stmt.where(func.lower("," + func.coalesce(Card.tags, "") + ",").like(needle))
+
+    rows = (
+        await db.scalars(stmt.order_by(Card.created_at, Card.id))
     ).all()
+    return [CardOut.model_validate(c) for c in rows]
 
 
 @router.post(
@@ -50,12 +64,17 @@ async def create_card(
     payload: CardCreate,
     deck: Deck = Depends(get_owned_deck),
     db: AsyncSession = Depends(get_db),
-) -> Card:
-    card = Card(deck_id=deck.id, **payload.model_dump())
+) -> CardOut:
+    card = Card(
+        deck_id=deck.id,
+        front=payload.front,
+        back=payload.back,
+        tags=tags_to_storage(payload.tags),
+    )
     db.add(card)
     await db.commit()
     await db.refresh(card)
-    return card
+    return CardOut.model_validate(card)
 
 
 @router.put("/cards/{card_id}", response_model=CardOut, summary="Update a card")
@@ -63,13 +82,16 @@ async def update_card(
     payload: CardUpdate,
     card: Card = Depends(get_owned_card),
     db: AsyncSession = Depends(get_db),
-) -> Card:
+) -> CardOut:
     data = payload.model_dump(exclude_unset=True)
+    if "tags" in data:
+        # list[str] → comma-separated storage (None clears all tags).
+        data["tags"] = tags_to_storage(data["tags"] or [])
     for field, value in data.items():
         setattr(card, field, value)
     await db.commit()
     await db.refresh(card)
-    return card
+    return CardOut.model_validate(card)
 
 
 @router.delete(
@@ -99,18 +121,24 @@ async def export_cards_csv(
     db: AsyncSession = Depends(get_db),
 ) -> PlainTextResponse:
     """Round-trip companion to the bulk import: the exported file can be
-    re-imported into any other deck (or into Anki-style tools) as-is."""
+    re-imported into any other deck (or into Anki-style tools) as-is.
+    A third `tags` column is included when any card carries tags; the bulk
+    importer accepts it back (tags separated by `|` inside the cell)."""
     cards = (
         await db.scalars(
             select(Card).where(Card.deck_id == deck.id).order_by(Card.created_at, Card.id)
         )
     ).all()
 
+    include_tags = any(c.tags for c in cards)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["front", "back"])
+    writer.writerow(["front", "back", "tags"] if include_tags else ["front", "back"])
     for card in cards:
-        writer.writerow([card.front, card.back])
+        row = [card.front, card.back]
+        if include_tags:
+            row.append("|".join(t.strip() for t in (card.tags or "").split(",") if t.strip()))
+        writer.writerow(row)
 
     # Filesystem-safe filename derived from the deck title.
     slug = re.sub(r"[^a-zA-Z0-9-_]+", "-", deck.title).strip("-").lower() or "deck"
@@ -174,8 +202,14 @@ async def bulk_import_cards(
             f"(got {len(cards)}).",
         )
 
-    # Single bulk insert — one flush for the whole file.
-    db.add_all([Card(deck_id=deck.id, front=front, back=back) for front, back in cards])
+    # Single bulk insert — one flush for the whole file. Each parsed row is a
+    # (front, back, tags) tuple; tags is [] when the CSV has no tags column.
+    db.add_all(
+        [
+            Card(deck_id=deck.id, front=front, back=back, tags=tags_to_storage(tag_list))
+            for front, back, tag_list in cards
+        ]
+    )
     await db.commit()
 
     return BulkImportResult(imported=len(cards), skipped=len(errors), errors=errors[:50])

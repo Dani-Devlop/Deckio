@@ -5,14 +5,25 @@ deck in **three aggregate queries** (not N+1 per-deck queries) so the
 dashboard stays fast as the library grows.
 """
 
+import re
+
 from fastapi import APIRouter, Depends, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..deps import get_current_user, get_owned_deck
 from ..models import Card, CardReview, Deck, StudySession, User, utcnow
-from ..schemas import DeckCreate, DeckOut, DeckUpdate
+from ..schemas import (
+    BundleCardIn,
+    DeckBundleIn,
+    DeckBundleOut,
+    DeckCreate,
+    DeckOut,
+    DeckUpdate,
+    tags_to_storage,
+)
 
 router = APIRouter(prefix="/decks", tags=["Decks"])
 
@@ -126,8 +137,10 @@ async def duplicate_deck(
     db.add(copy)
     await db.flush()  # assign copy.id before inserting child cards
 
-    # New cards keep front/back only — SRS fields use their model defaults.
-    db.add_all([Card(deck_id=copy.id, front=c.front, back=c.back) for c in cards])
+    # New cards keep front/back/tags — SRS fields use their model defaults.
+    db.add_all(
+        [Card(deck_id=copy.id, front=c.front, back=c.back, tags=c.tags) for c in cards]
+    )
     await db.commit()
     await db.refresh(copy)
 
@@ -207,3 +220,87 @@ async def delete_deck(
     await db.delete(deck)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ------------------------- Deck bundle (share) -------------------------
+
+
+def _bundle_filename(title: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9-_]+", "-", title).strip("-").lower() or "deck"
+    return f"{slug}-deckio.json"
+
+
+@router.get(
+    "/{deck_id}/bundle",
+    response_model=DeckBundleOut,
+    summary="Export a deck as a portable JSON bundle (cards + tags, no SRS history)",
+)
+async def export_deck_bundle(
+    deck: Deck = Depends(get_owned_deck),
+    db: AsyncSession = Depends(get_db),
+) -> JSONResponse:
+    """Share-friendly snapshot of a deck. Re-import it with `POST /decks/import`
+    (on any account) to get a fresh copy with SRS progress reset."""
+    cards = (
+        await db.scalars(select(Card).where(Card.deck_id == deck.id).order_by(Card.created_at))
+    ).all()
+    bundle = DeckBundleOut(
+        title=deck.title,
+        description=deck.description,
+        color=deck.color,
+        icon=deck.icon,
+        card_count=len(cards),
+        cards=[
+            BundleCardIn(
+                front=c.front,
+                back=c.back,
+                tags=[t.strip() for t in (c.tags or "").split(",") if t.strip()],
+            )
+            for c in cards
+        ],
+    )
+    return JSONResponse(
+        content=bundle.model_dump(),
+        headers={"Content-Disposition": f'attachment; filename="{_bundle_filename(deck.title)}"'},
+    )
+
+
+@router.post(
+    "/import",
+    response_model=DeckOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Import a deck from a JSON bundle (cards + tags, SRS reset)",
+)
+async def import_deck_bundle(
+    payload: DeckBundleIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> DeckOut:
+    """Create a new deck from an exported bundle. All cards are inserted as
+    brand-new (SRS state zeroed → due immediately)."""
+    deck = Deck(
+        user_id=user.id,
+        title=payload.title[:120],
+        description=payload.description,
+        color=payload.color,
+        icon=payload.icon,
+    )
+    db.add(deck)
+    await db.flush()
+
+    db.add_all(
+        [
+            Card(deck_id=deck.id, front=c.front, back=c.back, tags=tags_to_storage(c.tags))
+            for c in payload.cards
+        ]
+    )
+    await db.commit()
+    await db.refresh(deck)
+
+    # All imported cards are new → due immediately; report the real due count.
+    due = await db.scalar(
+        select(func.count())
+        .select_from(Card)
+        .where(Card.deck_id == deck.id, or_(Card.due_at.is_(None), Card.due_at <= utcnow()))
+    )
+    return _to_deck_out(deck, {"card_count": len(payload.cards), "due": int(due or 0)})

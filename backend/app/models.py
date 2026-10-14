@@ -75,6 +75,11 @@ class Card(Base):
     deck_id: Mapped[int] = mapped_column(ForeignKey("decks.id", ondelete="CASCADE"), index=True)
     front: Mapped[str] = mapped_column(Text)  # question / prompt side
     back: Mapped[str] = mapped_column(Text)  # answer side
+    # Free-form labels stored as a comma-separated string (","). The API layer
+    # serializes them as a proper list[str] — the storage format is an
+    # implementation detail that keeps SQLite/PG schemas simple and lets the
+    # search filter use a plain LIKE.
+    tags: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # --- Spaced repetition state (simplified SM-2, updated on study reviews) ---
