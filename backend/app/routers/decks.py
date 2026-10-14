@@ -49,6 +49,8 @@ def _to_deck_out(deck: Deck, stats: dict) -> DeckOut:
         accuracy=round(correct / reviews * 100, 1) if reviews else None,
         last_studied_at=stats.get("last_studied_at"),
         due_count=stats.get("due", 0),
+        new_per_day=deck.new_per_day,
+        max_reviews=deck.max_reviews,
         share_token=deck.share_token,
     )
 
@@ -139,6 +141,8 @@ async def duplicate_deck(
         description=deck.description,
         color=deck.color,
         icon=deck.icon,
+        new_per_day=deck.new_per_day,  # smart-review presets carry over
+        max_reviews=deck.max_reviews,
     )
     db.add(copy)
     await db.flush()  # assign copy.id before inserting child cards
@@ -324,6 +328,8 @@ async def export_deck_bundle(
         description=deck.description,
         color=deck.color,
         icon=deck.icon,
+        new_per_day=deck.new_per_day,
+        max_reviews=deck.max_reviews,
         card_count=len(cards),
         cards=[
             BundleCardIn(
@@ -361,6 +367,9 @@ async def import_deck_bundle(
         description=payload.description,
         color=payload.color,
         icon=payload.icon,
+        # Older bundles don't carry SRS presets → model defaults (20/100).
+        new_per_day=20 if payload.new_per_day is None else payload.new_per_day,
+        max_reviews=100 if payload.max_reviews is None else payload.max_reviews,
     )
     db.add(deck)
     await db.flush()

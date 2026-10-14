@@ -76,6 +76,15 @@ class DeckBase(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     color: str = Field(default="#f59e0b", pattern=r"^#[0-9a-fA-F]{6}$", description="Hex accent color")
     icon: str = Field(default="📚", max_length=8, description="Emoji icon")
+    # Smart-review presets honored by `study/start?srs=true`:
+    new_per_day: int = Field(
+        default=20, ge=0, le=100,
+        description="New cards a smart review may introduce per day (UTC); 0 = review-only",
+    )
+    max_reviews: int = Field(
+        default=100, ge=5, le=500,
+        description="Hard cap on the size of one smart-review session",
+    )
 
 
 class DeckCreate(DeckBase):
@@ -89,6 +98,8 @@ class DeckUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
     icon: str | None = Field(default=None, max_length=8)
+    new_per_day: int | None = Field(default=None, ge=0, le=100)
+    max_reviews: int | None = Field(default=None, ge=5, le=500)
 
 
 class DeckOut(BaseModel):
@@ -106,6 +117,9 @@ class DeckOut(BaseModel):
     accuracy: float | None = None  # percentage 0–100
     last_studied_at: datetime | None = None
     due_count: int = 0  # cards due for review (SM-2 spaced repetition)
+    # Smart-review presets (per-deck):
+    new_per_day: int = 20
+    max_reviews: int = 100
     # Public share link token (null = private). The client builds
     # `/?share=<token>` preview URLs from it.
     share_token: str | None = None
@@ -284,6 +298,11 @@ class StudyStartOut(BaseModel):
     mode: str = "study"
     srs: bool = False
     total_cards: int
+    # Smart-review plan shape (0/0 for regular sessions):
+    plan_reviews: int = 0  # scheduled cards that already have reps
+    plan_new: int = 0  # brand-new cards the session introduces
+    # Human-readable reason when the deck's limits trimmed the plan, else None.
+    note: str | None = None
 
 
 class StudyNextOut(BaseModel):
@@ -496,6 +515,9 @@ class DeckBundleIn(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     color: str = Field(default="#f59e0b", pattern=r"^#[0-9a-fA-F]{6}$")
     icon: str = Field(default="📚", max_length=8)
+    # Optional SRS presets (older bundles don't carry them → model defaults).
+    new_per_day: int | None = Field(default=None, ge=0, le=100)
+    max_reviews: int | None = Field(default=None, ge=5, le=500)
     cards: list[BundleCardIn] = Field(min_length=1, max_length=MAX_ROWS_PER_IMPORT)
 
 
@@ -508,6 +530,8 @@ class DeckBundleOut(BaseModel):
     description: str | None
     color: str
     icon: str
+    new_per_day: int = 20
+    max_reviews: int = 100
     card_count: int
     cards: list[BundleCardIn]
 

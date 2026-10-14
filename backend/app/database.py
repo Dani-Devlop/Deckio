@@ -73,6 +73,8 @@ async def run_startup_migrations() -> None:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE study_sessions ADD COLUMN srs BOOLEAN NOT NULL DEFAULT 0"
             )
+        if "plan_json" not in session_cols:
+            sync_conn.exec_driver_sql("ALTER TABLE study_sessions ADD COLUMN plan_json TEXT")
 
         user_cols = {c["name"] for c in insp.get_columns("users")}
         if "daily_goal" not in user_cols:
@@ -85,6 +87,14 @@ async def run_startup_migrations() -> None:
             sync_conn.exec_driver_sql("ALTER TABLE decks ADD COLUMN share_token TEXT")
             sync_conn.exec_driver_sql(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_decks_share_token ON decks (share_token)"
+            )
+        if "new_per_day" not in deck_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE decks ADD COLUMN new_per_day INTEGER NOT NULL DEFAULT 20"
+            )
+        if "max_reviews" not in deck_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE decks ADD COLUMN max_reviews INTEGER NOT NULL DEFAULT 100"
             )
 
     async with engine.begin() as conn:

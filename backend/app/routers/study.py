@@ -7,7 +7,15 @@ Flow:
 
 The server tracks progress by comparing `card_reviews` rows against the
 deck's card list, so sessions survive page reloads and card edits.
+
+Smart review (`?srs=true`) additionally honors the deck's presets:
+    - `max_reviews` caps the session size,
+    - `new_per_day` limits how many brand-new cards may be introduced per
+      calendar day (UTC). The exact ordered card plan is stored on the
+      session (`plan_json`) so limits stay deterministic across reloads.
 """
+
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
@@ -20,6 +28,72 @@ from ..schemas import ReviewIn, ReviewOut, StudyNextOut, StudyStartOut
 from ..utils.srs import apply_sm2
 
 router = APIRouter(tags=["Study"])
+
+
+async def _new_introduced_today(db: AsyncSession, deck_id: int) -> int:
+    """Count deck cards whose FIRST review happened today (UTC).
+
+    These are the "new cards introduced today" — they burn the deck's
+    `new_per_day` budget so limits survive session restarts.
+    """
+    today = utcnow().date().isoformat()
+    return int(
+        await db.scalar(
+            select(func.count()).select_from(
+                select(CardReview.card_id)
+                .join(Card, CardReview.card_id == Card.id)
+                .where(Card.deck_id == deck_id)
+                .group_by(CardReview.card_id)
+                .having(func.date(func.min(CardReview.reviewed_at)) == today)
+                .subquery()
+            )
+        )
+        or 0
+    )
+
+
+async def _build_srs_plan(db: AsyncSession, deck: Deck) -> tuple[list[int], int, int, str | None]:
+    """Ordered card-id plan for a smart-review session.
+
+    Reviews (reps > 0, due now) come first — most overdue wins — then new
+    cards (reps == 0), shaped by the deck presets:
+
+        plan = due_reviews[:max_reviews] + due_new[:min(new_budget, room_left)]
+
+    where `new_budget = new_per_day - new cards already introduced today`.
+
+    Returns:
+        (plan_ids, n_reviews, n_new, note) — `note` is a human-readable reason
+        when the deck's limits actually trimmed the plan (for the UI), else None.
+    """
+    now = utcnow()
+    due_cards = (
+        await db.scalars(
+            select(Card)
+            .where(Card.deck_id == deck.id, or_(Card.due_at.is_(None), Card.due_at <= now))
+            .order_by(Card.due_at.asc().nulls_first(), Card.created_at)
+        )
+    ).all()
+
+    reviews = [c for c in due_cards if c.reps > 0]
+    new_cards = [c for c in due_cards if c.reps == 0]
+
+    plan_reviews = [c.id for c in reviews[: deck.max_reviews]]
+    room_left = deck.max_reviews - len(plan_reviews)
+    new_budget = max(0, deck.new_per_day - await _new_introduced_today(db, deck.id))
+    plan_new = [c.id for c in new_cards[: min(new_budget, room_left)]]
+
+    note: str | None = None
+    if reviews and len(plan_reviews) < len(reviews):
+        note = f"Capped at {deck.max_reviews} cards by the deck's session limit"
+    elif new_cards and len(plan_new) < len(new_cards):
+        # Name the binding constraint: the daily budget or the session cap.
+        if new_budget <= room_left:
+            note = f"Daily limit — {deck.new_per_day} new card{'s' if deck.new_per_day == 1 else ''}/day"
+        else:
+            note = f"Capped at {deck.max_reviews} cards by the deck's session limit"
+
+    return plan_reviews + plan_new, len(plan_reviews), len(plan_new), note
 
 
 async def _session_progress(db: AsyncSession, session: StudySession) -> tuple[int, int]:
@@ -55,15 +129,21 @@ async def start_study(
     srs: bool = Query(default=False, description="Smart review: only cards due by the SM-2 schedule"),
 ) -> StudyStartOut:
     if srs:
-        # Spaced-repetition session: only cards that are new (never scheduled)
-        # or overdue right now. The plan size is fixed at start.
-        due_count = await db.scalar(
-            select(func.count()).select_from(Card).where(
-                Card.deck_id == deck.id,
-                or_(Card.due_at.is_(None), Card.due_at <= utcnow()),
+        # Spaced-repetition session shaped by the deck's presets. The ordered
+        # plan is stored on the session so limits stay deterministic.
+        plan, n_reviews, n_new, note = await _build_srs_plan(db, deck)
+        if not plan:
+            due_exists = await db.scalar(
+                select(func.count()).select_from(Card).where(
+                    Card.deck_id == deck.id,
+                    or_(Card.due_at.is_(None), Card.due_at <= utcnow()),
+                )
             )
-        )
-        if not due_count:
+            if due_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Daily smart-review limit reached — raise the limits in the deck settings ⚙️",
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Nothing due right now — you're all caught up! 🎉",
@@ -73,9 +153,10 @@ async def start_study(
             deck_id=deck.id,
             mode="study",
             srs=True,
-            total_planned=int(due_count),
+            total_planned=len(plan),
+            plan_json=json.dumps(plan),
         )
-        total = int(due_count)
+        total = len(plan)
     else:
         total = await db.scalar(
             select(func.count()).select_from(Card).where(Card.deck_id == deck.id)
@@ -86,12 +167,23 @@ async def start_study(
                 detail="This deck has no cards yet — add some cards first",
             )
         session = StudySession(user_id=user.id, deck_id=deck.id, mode="study")
+        n_reviews = n_new = 0
+        note = None
 
     db.add(session)
     await db.commit()
     await db.refresh(session)
 
-    return StudyStartOut(session_id=session.id, deck_id=deck.id, srs=session.srs, total_cards=total)
+    out = StudyStartOut(
+        session_id=session.id,
+        deck_id=deck.id,
+        srs=session.srs,
+        total_cards=total,
+        plan_reviews=n_reviews,
+        plan_new=n_new,
+        note=note,
+    )
+    return out
 
 
 @router.get(
@@ -137,12 +229,39 @@ async def study_next(
     reviewed, total = await _session_progress(db, session)
 
     # Next card selection:
-    # - SRS session → oldest due card first (deterministic, most overdue wins)
+    # - SRS session with a stored plan → next un-reviewed card in plan order
+    #   (reviews first, then new cards — the plan was shaped by the presets)
+    # - legacy SRS session (no plan) → oldest due card (most overdue wins)
     # - regular session → any un-reviewed card, random order
     not_reviewed = ~Card.id.in_(
         select(CardReview.card_id).where(CardReview.session_id == session.id)
     )
-    if session.srs:
+    next_card = None
+    if session.srs and session.plan_json:
+        try:
+            plan_ids: list[int] = json.loads(session.plan_json)
+        except (TypeError, ValueError):
+            plan_ids = []
+        if plan_ids:
+            plan_rows = (
+                await db.scalars(select(Card).where(Card.id.in_(plan_ids)))
+            ).all()
+            existing = {c.id: c for c in plan_rows}
+            reviewed_ids = set(
+                (
+                    await db.scalars(
+                        select(CardReview.card_id).where(CardReview.session_id == session.id)
+                    )
+                ).all()
+            )
+            for cid in plan_ids:  # plan order wins over dict order
+                if cid not in reviewed_ids and cid in existing:
+                    next_card = existing[cid]
+                    break
+    # Legacy SRS fallback only applies when NO plan was stored — a stored plan
+    # is authoritative: once it's exhausted the session is finished, even if
+    # other cards became due mid-session (they wait for the next session).
+    if next_card is None and session.srs and not session.plan_json:
         next_card = (
             await db.scalars(
                 select(Card)
@@ -155,7 +274,7 @@ async def study_next(
                 .limit(1)
             )
         ).first()
-    else:
+    if next_card is None and not session.srs:
         next_card = (
             await db.scalars(
                 select(Card)

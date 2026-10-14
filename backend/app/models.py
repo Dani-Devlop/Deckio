@@ -63,6 +63,12 @@ class Deck(Base):
     # Public read-only share token (secrets.token_urlsafe). NULL = private.
     # The web client builds a `/?share=<token>` preview URL from it.
     share_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, default=None)
+    # --- Smart-review (SRS) presets, honored by `study/start?srs=true` ---
+    # new_per_day: how many brand-new (never studied) cards a smart review
+    #   session may introduce per calendar day (UTC). 0 = review-only mode.
+    # max_reviews: hard cap on the total size of one smart-review session.
+    new_per_day: Mapped[int] = mapped_column(Integer, default=20)
+    max_reviews: Mapped[int] = mapped_column(Integer, default=100)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     owner: Mapped["User"] = relationship(back_populates="decks")
@@ -121,6 +127,11 @@ class StudySession(Base):
     # are answered, even if the deck was capped by `limit` or grows later.
     # For SRS study sessions it stores the number of due cards.
     total_planned: Mapped[int | None] = mapped_column(default=None)
+    # SRS sessions: exact ordered card-id plan as a JSON list — deck reviews
+    # (oldest due first) then new cards within the deck's presets. Keeps the
+    # daily-limit budget deterministic across reloads; NULL = legacy session
+    # (plan re-derived from due state on each `next`).
+    plan_json: Mapped[str | None] = mapped_column(Text, default=None)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
