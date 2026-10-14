@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { motion } from "framer-motion";
 import { BarChart3, Layers, LogOut, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
@@ -147,23 +148,33 @@ export function DeckioApp() {
 
   if (!booted) return <BootSplash />;
 
+  // key on view+deck so switching views replays the entrance animation
+  const viewKey = user ? `${view}-${activeDeckId ?? 0}` : "auth";
+
   return (
     <div className="flex min-h-screen flex-col bg-background">
       {user && <SiteHeader />}
       <main className="flex-1">
-        {!user ? (
-          <AuthView />
-        ) : view === "deck" && activeDeckId != null ? (
-          <DeckDetailView key={`deck-${activeDeckId}`} deckId={activeDeckId} />
-        ) : view === "study" && activeDeckId != null ? (
-          <StudyView key={`study-${activeDeckId}`} deckId={activeDeckId} />
-        ) : view === "quiz" && activeDeckId != null ? (
-          <QuizView key={`quiz-${activeDeckId}`} deckId={activeDeckId} />
-        ) : view === "stats" ? (
-          <StatsView />
-        ) : (
-          <DashboardView />
-        )}
+        <motion.div
+          key={viewKey}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
+        >
+          {!user ? (
+            <AuthView />
+          ) : view === "deck" && activeDeckId != null ? (
+            <DeckDetailView key={`deck-${activeDeckId}`} deckId={activeDeckId} />
+          ) : view === "study" && activeDeckId != null ? (
+            <StudyView key={`study-${activeDeckId}`} deckId={activeDeckId} />
+          ) : view === "quiz" && activeDeckId != null ? (
+            <QuizView key={`quiz-${activeDeckId}`} deckId={activeDeckId} />
+          ) : view === "stats" ? (
+            <StatsView />
+          ) : (
+            <DashboardView />
+          )}
+        </motion.div>
       </main>
       <SiteFooter />
     </div>

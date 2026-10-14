@@ -12,10 +12,14 @@ interface AppState {
   user: User | null;
   view: ViewName;
   activeDeckId: number | null;
+  /** Whether the study view should open a smart (SM-2) session. */
+  studySrs: boolean;
   boot: () => Promise<void>;
   setAuth: (user: User, token: string) => void;
   logout: () => void;
   go: (view: ViewName, deckId?: number | null) => void;
+  /** Navigate into study mode, optionally as a smart spaced-repetition session. */
+  goStudy: (deckId: number, srs: boolean) => void;
 }
 
 /** Global client-side SPA state: auth + which view is on screen. */
@@ -24,6 +28,7 @@ export const useAppStore = create<AppState>((set) => ({
   user: null,
   view: "auth",
   activeDeckId: null,
+  studySrs: false,
 
   boot: async () => {
     const token = getAuthToken();
@@ -45,8 +50,11 @@ export const useAppStore = create<AppState>((set) => ({
 
   logout: () => {
     setAuthToken(null);
-    set({ user: null, view: "auth", activeDeckId: null });
+    set({ user: null, view: "auth", activeDeckId: null, studySrs: false });
   },
 
   go: (view, deckId = null) => set({ view, activeDeckId: deckId }),
+
+  goStudy: (deckId, srs) =>
+    set({ view: "study", activeDeckId: deckId, studySrs: srs }),
 }));

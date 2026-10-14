@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Loader2, RotateCcw, Trophy, X } from "lucide-react";
+import { ArrowLeft, Check, Loader2, RotateCcw, Sparkles, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,9 @@ import type { ReviewResult } from "@/lib/types";
 /** Self-paced study mode: flip card → self-grade (Again / Got it). */
 export function StudyView({ deckId }: { deckId: number }) {
   const go = useAppStore((s) => s.go);
+  const initialSrs = useAppStore((s) => s.studySrs);
   const [session, setSession] = useState<StudyStart | null>(null);
+  const [isSrs, setIsSrs] = useState(initialSrs);
   const [current, setCurrent] = useState<StudyNext | null>(null);
   const [flipped, setFlipped] = useState(false);
   const [results, setResults] = useState<ReviewResult[]>([]);
@@ -30,9 +32,10 @@ export function StudyView({ deckId }: { deckId: number }) {
     let cancelled = false;
     (async () => {
       try {
-        const start = await api.study.start(deckId);
+        const start = await api.study.start(deckId, initialSrs);
         if (cancelled) return;
         setSession(start);
+        setIsSrs(start.srs);
         const next = await api.study.next(deckId, start.session_id);
         if (cancelled) return;
         setCurrent(next);
@@ -46,7 +49,7 @@ export function StudyView({ deckId }: { deckId: number }) {
     return () => {
       cancelled = true;
     };
-  }, [deckId]);
+  }, [deckId, initialSrs]);
 
   // ---- Submit a review and move to the next card ----
   const review = useCallback(
@@ -150,7 +153,7 @@ export function StudyView({ deckId }: { deckId: number }) {
               setPhase("loading");
               setResults([]);
               api.study
-                .start(deckId)
+                .start(deckId, isSrs)
                 .then((s) => api.study.next(deckId, s.session_id))
                 .then((n) => {
                   setSession((prev) => prev && { ...prev, session_id: n.session_id });
@@ -164,7 +167,7 @@ export function StudyView({ deckId }: { deckId: number }) {
                 });
             }}
           >
-            <RotateCcw className="h-4 w-4" /> Study again
+            <RotateCcw className="h-4 w-4" /> {isSrs ? "Review again" : "Study again"}
           </Button>
           <Button variant="outline" onClick={() => go("deck", deckId)}>
             Back to deck
@@ -195,6 +198,11 @@ export function StudyView({ deckId }: { deckId: number }) {
           {reviewed}/{total}
         </span>
       </div>
+      {isSrs && (
+        <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-amber-600">
+          <Sparkles className="h-3.5 w-3.5" /> Smart review — cards scheduled by spaced repetition
+        </p>
+      )}
 
       {/* ---------- Flashcard ---------- */}
       <div className="mt-6" style={{ perspective: "1400px" }}>

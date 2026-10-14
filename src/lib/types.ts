@@ -27,6 +27,7 @@ export interface Deck {
   reviews_count: number;
   accuracy: number | null;
   last_studied_at: string | null;
+  due_count: number;
 }
 
 export interface DeckInput {
@@ -61,6 +62,7 @@ export interface StudyStart {
   session_id: number;
   deck_id: number;
   mode: string;
+  srs: boolean;
   total_cards: number;
 }
 
@@ -141,6 +143,7 @@ export interface StatsOverview {
   accuracy: number | null;
   streak_days: number;
   mastered_cards: number;
+  due_cards: number;
   activity: ActivityDay[];
 }
 

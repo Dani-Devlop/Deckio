@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  AlertCircle,
   ArrowLeft,
   BookOpen,
   Flame,
@@ -153,10 +154,11 @@ export function StatsView() {
           sub="≥80% over 3+ reviews"
         />
         <Kpi
-          icon={Play}
-          label="Sessions"
-          value={overview.total_sessions}
-          accent="bg-violet-100 text-violet-600"
+          icon={AlertCircle}
+          label="Due today"
+          value={overview.due_cards}
+          accent="bg-amber-100 text-amber-600"
+          sub={overview.due_cards > 0 ? "smart review ready" : "all caught up 🎉"}
         />
         <Kpi
           icon={BookOpen}

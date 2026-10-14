@@ -11,6 +11,7 @@ import {
   Play,
   Plus,
   Search,
+  Sparkles,
   Target,
   Trash2,
 } from "lucide-react";
@@ -41,7 +42,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api } from "@/lib/api";
 import { accuracyColor, timeAgo } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
-import type { Deck } from "@/lib/types";
+import type { Deck, StatsOverview } from "@/lib/types";
 
 export const DECK_COLORS = ["#f59e0b", "#f97316", "#f43f5e", "#10b981", "#14b8a6", "#8b5cf6"];
 export const DECK_ICONS = ["📚", "🧠", "🌱", "⚡", "🎯", "💼", "🗣️", "🧪", "🎨", "🧮", "🌍", "🏰"];
@@ -269,6 +270,11 @@ function DeckCard({
           <span className="inline-flex items-center gap-1">
             <Clock className="h-3.5 w-3.5" /> {timeAgo(deck.last_studied_at)}
           </span>
+          {deck.due_count > 0 && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+              <Sparkles className="h-3 w-3" /> {deck.due_count} due
+            </span>
+          )}
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-2">
@@ -298,7 +304,9 @@ function DeckCard({
 /** Dashboard: list, search, sort, create / edit / delete decks. */
 export function DashboardView() {
   const go = useAppStore((s) => s.go);
+  const goStudy = useAppStore((s) => s.goStudy);
   const [decks, setDecks] = useState<Deck[] | null>(null);
+  const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"newest" | "name" | "cards">("newest");
@@ -315,6 +323,11 @@ export function DashboardView() {
       setLoadError(e instanceof ApiError ? e.message : "Failed to load decks.");
       setDecks([]);
     }
+    // Summary strip is secondary — never block the deck grid on it.
+    api.stats
+      .overview()
+      .then(setOverview)
+      .catch(() => setOverview(null));
   }, []);
 
   useEffect(() => {
@@ -399,6 +412,38 @@ export function DashboardView() {
         </div>
       </div>
 
+      {/* ---------- Summary strip ---------- */}
+      {overview && (
+        <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <button
+            onClick={() => go("stats")}
+            className="rounded-xl border bg-card px-4 py-3 text-left transition hover:border-amber-300 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+          >
+            <p className="text-xs text-muted-foreground">Decks</p>
+            <p className="mt-0.5 text-xl font-bold">{overview.total_decks}</p>
+          </button>
+          <div className="rounded-xl border bg-card px-4 py-3">
+            <p className="text-xs text-muted-foreground">Cards</p>
+            <p className="mt-0.5 text-xl font-bold">{overview.total_cards}</p>
+          </div>
+          <button
+            onClick={() => go("stats")}
+            className="rounded-xl border bg-card px-4 py-3 text-left transition hover:border-amber-300 hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+          >
+            <p className="text-xs text-muted-foreground">Due today</p>
+            <p className={`mt-0.5 text-xl font-bold ${overview.due_cards > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+              {overview.due_cards}
+            </p>
+          </button>
+          <div className="rounded-xl border bg-card px-4 py-3">
+            <p className="text-xs text-muted-foreground">Accuracy</p>
+            <p className="mt-0.5 text-xl font-bold">
+              {overview.accuracy != null ? `${overview.accuracy}%` : "—"}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ---------- Error banner ---------- */}
       {loadError && (
         <div className="mt-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -446,7 +491,7 @@ export function DashboardView() {
               key={deck.id}
               deck={deck}
               onOpen={() => go("deck", deck.id)}
-              onStudy={() => go("study", deck.id)}
+              onStudy={() => goStudy(deck.id, deck.due_count > 0)}
               onEdit={() => {
                 setEditing(deck);
                 setFormOpen(true);

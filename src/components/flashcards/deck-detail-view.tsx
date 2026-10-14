@@ -6,12 +6,14 @@ import {
   BookOpen,
   Brain,
   Clock,
+  Download,
   FileUp,
   Loader2,
   MoreVertical,
   Pencil,
   Play,
   Plus,
+  Sparkles,
   Target,
   Trash2,
   Upload,
@@ -289,6 +291,7 @@ function ImportCsvDialog({
 /** Deck detail: header with stats + actions, and the card list. */
 export function DeckDetailView({ deckId }: { deckId: number }) {
   const go = useAppStore((s) => s.go);
+  const goStudy = useAppStore((s) => s.goStudy);
   const [deck, setDeck] = useState<Deck | null>(null);
   const [cards, setCards] = useState<Card[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -341,6 +344,26 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Failed to delete deck");
       setBusyDelete(false);
+    }
+  }
+
+  /** Download the deck as CSV via the API export endpoint. */
+  async function exportCsv() {
+    if (!deck) return;
+    try {
+      const csv = await api.cards.exportCsv(deck.id);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${deck.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "deck"}-cards.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Deck exported as CSV");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Export failed");
     }
   }
 
@@ -402,10 +425,24 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
             <div className="flex items-center gap-2">
               <Button
                 className="gap-1.5 bg-amber-500 text-white hover:bg-amber-600"
-                onClick={() => go("study", deck.id)}
+                onClick={() => goStudy(deck.id, false)}
                 disabled={empty}
               >
                 <Play className="h-4 w-4" /> Study
+              </Button>
+              <Button
+                variant="outline"
+                className="gap-1.5 border-amber-300 text-amber-700 hover:bg-amber-50 hover:text-amber-800 dark:border-amber-500/40 dark:text-amber-400 dark:hover:bg-amber-500/10"
+                onClick={() => goStudy(deck.id, true)}
+                disabled={empty || deck.due_count === 0}
+                title={deck.due_count === 0 ? "Nothing due right now" : `Review ${deck.due_count} due card(s)`}
+              >
+                <Sparkles className="h-4 w-4" /> Smart review
+                {deck.due_count > 0 && (
+                  <span className="rounded-full bg-amber-100 px-1.5 text-xs font-semibold text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+                    {deck.due_count}
+                  </span>
+                )}
               </Button>
               <Button
                 variant="outline"
@@ -432,6 +469,9 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                   <DropdownMenuItem onClick={() => setImportOpen(true)}>
                     <FileUp className="h-4 w-4" /> Import CSV
                   </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void exportCsv()}>
+                    <Download className="h-4 w-4" /> Export CSV
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={() => setDeleteDeckOpen(true)}
@@ -455,6 +495,11 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
             <Badge variant="secondary" className="gap-1.5 py-1.5">
               <Clock className="h-3.5 w-3.5" /> studied {timeAgo(deck.last_studied_at)}
             </Badge>
+            {deck.due_count > 0 && (
+              <Badge className="gap-1.5 bg-amber-500 py-1.5 text-white hover:bg-amber-500">
+                <Sparkles className="h-3.5 w-3.5" /> {deck.due_count} due for review
+              </Badge>
+            )}
           </div>
         </div>
       </div>
@@ -465,6 +510,9 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
           Cards <Badge variant="secondary">{cards.length}</Badge>
         </h2>
         <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => void exportCsv()} className="gap-1.5">
+            <Download className="h-4 w-4" /> Export
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} className="gap-1.5">
             <FileUp className="h-4 w-4" /> Import CSV
           </Button>

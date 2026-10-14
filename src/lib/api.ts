@@ -109,6 +109,26 @@ async function request<T>(
   return data as T;
 }
 
+async function requestText(path: string): Promise<string> {
+  const headers: Record<string, string> = {};
+  const token = getAuthToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  let res: Response;
+  try {
+    res = await fetch(buildUrl(path), { method: "GET", headers });
+  } catch {
+    throw new ApiError(0, "Cannot reach the API server — is the backend running?");
+  }
+  if (!res.ok) {
+    if (res.status === 401 && token) {
+      setAuthToken(null);
+      if (typeof window !== "undefined") window.location.reload();
+    }
+    throw new ApiError(res.status, `Request failed (${res.status})`);
+  }
+  return res.text();
+}
+
 export const api = {
   // ---- Auth ----
   register: (email: string, password: string) =>
@@ -148,11 +168,13 @@ export const api = {
         raw: form,
       });
     },
+    exportCsv: (deckId: number) => requestText(`/api/decks/${deckId}/cards/export`),
   },
 
   // ---- Study ----
   study: {
-    start: (deckId: number) => request<StudyStart>("POST", `/api/decks/${deckId}/study/start`),
+    start: (deckId: number, srs = false) =>
+      request<StudyStart>("POST", `/api/decks/${deckId}/study/start${srs ? "?srs=true" : ""}`),
     next: (deckId: number, sessionId?: number) =>
       request<StudyNext>(
         "GET",
