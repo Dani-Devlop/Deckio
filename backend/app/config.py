@@ -5,6 +5,25 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _normalize_database_url(url: str) -> str:
+    """Normalize common database URL styles into SQLAlchemy **async** URLs.
+
+    Makes the API tolerant of real-world configuration:
+      - `file:...` (Prisma-style SQLite)  → `sqlite+aiosqlite:///...`
+      - `postgres://` (legacy Heroku)     → `postgresql+asyncpg://...`
+      - `postgresql://`                   → `postgresql+asyncpg://...`
+    """
+    url = (url or "").strip()
+    if url.startswith("file:"):
+        path = url[len("file:"):]
+        return f"sqlite+aiosqlite:///{path}"
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
 class Settings(BaseSettings):
     """Central settings object — everything overridable via environment."""
 
@@ -32,7 +51,9 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     """Cached settings factory (keeps .env parsing to a single pass)."""
-    return Settings()
+    s = Settings()
+    s.DATABASE_URL = _normalize_database_url(s.DATABASE_URL)
+    return s
 
 
 settings = get_settings()

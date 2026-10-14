@@ -79,7 +79,7 @@ async def start_quiz(
         random.shuffle(options)  # never reveal the correct answer by position
         questions.append(QuizQuestion(card_id=card.id, front=card.front, options=options))
 
-    session = StudySession(user_id=user.id, deck_id=deck.id, mode="quiz")
+    session = StudySession(user_id=user.id, deck_id=deck.id, mode="quiz", total_planned=len(questions))
     db.add(session)
     await db.commit()
     await db.refresh(session)
@@ -143,10 +143,13 @@ async def answer_quiz_question(
     answered = await db.scalar(
         select(func.count()).select_from(CardReview).where(CardReview.session_id == session.id)
     )
-    total = await db.scalar(
+    answered = int(answered or 0)
+    # A quiz session is complete when its PLANNED questions are all answered
+    # (not the whole deck — the start endpoint may have capped the quiz).
+    total = session.total_planned or await db.scalar(
         select(func.count()).select_from(Card).where(Card.deck_id == session.deck_id)
     )
-    answered, total = int(answered or 0), int(total or 0)
+    total = int(total or 0)
     finished = answered >= total
     if finished and session.finished_at is None:
         session.finished_at = utcnow()
@@ -200,7 +203,7 @@ async def quiz_result(
     answered = len(details)
     correct = sum(1 for d in details if d.result == "correct")
 
-    total = await db.scalar(
+    total = session.total_planned or await db.scalar(
         select(func.count()).select_from(Card).where(Card.deck_id == session.deck_id)
     )
     total = int(total or 0)

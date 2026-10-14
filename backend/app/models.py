@@ -91,6 +91,10 @@ class StudySession(Base):
     deck_id: Mapped[int] = mapped_column(ForeignKey("decks.id", ondelete="CASCADE"), index=True)
     # "study" = self-paced flip cards, "quiz" = multiple-choice (spec extension).
     mode: Mapped[str] = mapped_column(String(10), default="study")
+    # For quiz sessions: how many questions were generated at start (spec
+    # extension). Lets the session close exactly when its planned questions
+    # are answered, even if the deck was capped by `limit` or grows later.
+    total_planned: Mapped[int | None] = mapped_column(default=None)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
