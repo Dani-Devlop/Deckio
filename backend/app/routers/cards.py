@@ -71,6 +71,7 @@ async def create_card(
         back=payload.back,
         tags=tags_to_storage(payload.tags),
         hint=payload.hint,
+        image_url=payload.image_url,
     )
     db.add(card)
     await db.commit()
@@ -133,11 +134,14 @@ async def export_cards_csv(
 
     include_tags = any(c.tags for c in cards)
     include_hints = any(c.hint for c in cards)
+    include_images = any(c.image_url for c in cards)
     header = ["front", "back"]
     if include_tags:
         header.append("tags")
     if include_hints:
         header.append("hint")
+    if include_images:
+        header.append("image_url")
 
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -148,6 +152,8 @@ async def export_cards_csv(
             row.append("|".join(t.strip() for t in (card.tags or "").split(",") if t.strip()))
         if include_hints:
             row.append(card.hint or "")
+        if include_images:
+            row.append(card.image_url or "")
         writer.writerow(row)
 
     # Filesystem-safe filename derived from the deck title.
@@ -178,8 +184,8 @@ async def bulk_import_cards(
     - a raw request body with `Content-Type: text/csv` / `text/plain`.
 
     CSV format: two columns `front,back` (delimiter auto-detected:
-    comma / semicolon / tab). Optional extra columns: `tags` (`|`-separated)
-    and `hint`. An optional header row is tolerated.
+    comma / semicolon / tab). Optional extra columns: `tags` (`|`-separated),
+    `hint` and `image_url`. An optional header row is tolerated.
     Rows that fail validation are reported with their row numbers.
     """
     content_type = request.headers.get("content-type", "")
@@ -214,7 +220,7 @@ async def bulk_import_cards(
         )
 
     # Single bulk insert — one flush for the whole file. Each parsed row is a
-    # (front, back, tags, hint) tuple; tags is [] / hint None when absent.
+    # (front, back, tags, hint, image_url) tuple; tags is [] / others None when absent.
     db.add_all(
         [
             Card(
@@ -223,8 +229,9 @@ async def bulk_import_cards(
                 back=back,
                 tags=tags_to_storage(tag_list),
                 hint=hint,
+                image_url=image_url,
             )
-            for front, back, tag_list, hint in cards
+            for front, back, tag_list, hint, image_url in cards
         ]
     )
     await db.commit()

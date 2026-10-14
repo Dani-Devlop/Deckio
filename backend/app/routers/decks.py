@@ -143,11 +143,18 @@ async def duplicate_deck(
     db.add(copy)
     await db.flush()  # assign copy.id before inserting child cards
 
-    # New cards keep front/back/tags/hint — SRS fields use their model defaults.
+    # New cards keep front/back/tags/hint/image — SRS fields use their model defaults.
     # The copy is NOT shared even if the original was (share_token stays NULL).
     db.add_all(
         [
-            Card(deck_id=copy.id, front=c.front, back=c.back, tags=c.tags, hint=c.hint)
+            Card(
+                deck_id=copy.id,
+                front=c.front,
+                back=c.back,
+                tags=c.tags,
+                hint=c.hint,
+                image_url=c.image_url,
+            )
             for c in cards
         ]
     )
@@ -324,6 +331,7 @@ async def export_deck_bundle(
                 back=c.back,
                 tags=[t.strip() for t in (c.tags or "").split(",") if t.strip()],
                 hint=c.hint,
+                image_url=c.image_url,
             )
             for c in cards
         ],
@@ -365,6 +373,7 @@ async def import_deck_bundle(
                 back=c.back,
                 tags=tags_to_storage(c.tags),
                 hint=c.hint,
+                image_url=c.image_url,
             )
             for c in payload.cards
         ]

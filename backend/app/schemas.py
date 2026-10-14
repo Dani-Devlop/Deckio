@@ -116,6 +116,31 @@ class DeckOut(BaseModel):
 MAX_TAGS_PER_CARD = 8
 MAX_TAG_LENGTH = 32
 MAX_HINT_LENGTH = 300
+MAX_IMAGE_URL_LENGTH = 500
+
+# Allowed image sources for Card.image_url:
+# - http(s):// external URLs
+# - data:image/... inline payloads (small embedded pictures)
+# - protocol-relative "//cdn.example/x.png" and relative "/uploads/x.png"
+_IMAGE_PREFIXES = ("http://", "https://", "data:image/", "//", "/")
+
+
+def clean_image_url(url: str | None) -> str | None:
+    """Normalize an image URL: trim, drop empties, cap length, sanity-check scheme.
+
+    Raises ValueError for clearly invalid input so API clients get feedback
+    instead of silently storing a broken image.
+    """
+    if url is None:
+        return None
+    url = url.strip()
+    if not url:
+        return None
+    if len(url) > MAX_IMAGE_URL_LENGTH:
+        raise ValueError(f"image_url must be at most {MAX_IMAGE_URL_LENGTH} characters")
+    if not url.lower().startswith(_IMAGE_PREFIXES):
+        raise ValueError("image_url must start with http://, https://, data:image/ or / ")
+    return url
 
 
 def clean_hint(hint: str | None) -> str | None:
@@ -162,6 +187,11 @@ class CardBase(BaseModel):
         max_length=MAX_HINT_LENGTH,
         description="Optional memory aid shown before flipping",
     )
+    image_url: str | None = Field(
+        default=None,
+        max_length=MAX_IMAGE_URL_LENGTH,
+        description="Optional picture (URL) rendered above the text",
+    )
 
     @field_validator("tags")
     @classmethod
@@ -173,6 +203,11 @@ class CardBase(BaseModel):
     def _clean_hint(cls, v: str | None) -> str | None:
         return clean_hint(v)
 
+    @field_validator("image_url")
+    @classmethod
+    def _clean_image(cls, v: str | None) -> str | None:
+        return clean_image_url(v)
+
 
 class CardCreate(CardBase):
     pass
@@ -183,6 +218,7 @@ class CardUpdate(BaseModel):
     back: str | None = Field(default=None, min_length=1, max_length=2000)
     tags: list[str] | None = Field(default=None)
     hint: str | None = Field(default=None, max_length=MAX_HINT_LENGTH)
+    image_url: str | None = Field(default=None, max_length=MAX_IMAGE_URL_LENGTH)
 
     @field_validator("tags")
     @classmethod
@@ -194,6 +230,11 @@ class CardUpdate(BaseModel):
     def _clean_hint(cls, v: str | None) -> str | None:
         return clean_hint(v)
 
+    @field_validator("image_url")
+    @classmethod
+    def _clean_image(cls, v: str | None) -> str | None:
+        return clean_image_url(v)
+
 
 class CardOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -204,6 +245,7 @@ class CardOut(BaseModel):
     back: str
     tags: list[str] = []
     hint: str | None = None
+    image_url: str | None = None
     created_at: datetime
     # --- Spaced-repetition state (read-only surface for the web UI) ---
     # due_at == NULL means "new card" → due immediately; otherwise the
@@ -276,6 +318,7 @@ class QuizQuestion(BaseModel):
     front: str
     options: list[str]
     hint: str | None = None  # optional memory aid, may be revealed by the client
+    image_url: str | None = None  # optional picture on the question side
 
 
 class QuizStartOut(BaseModel):
@@ -428,6 +471,7 @@ class BundleCardIn(BaseModel):
     back: str = Field(min_length=1, max_length=2000)
     tags: list[str] = Field(default_factory=list)
     hint: str | None = Field(default=None, max_length=MAX_HINT_LENGTH)
+    image_url: str | None = Field(default=None, max_length=MAX_IMAGE_URL_LENGTH)
 
     @field_validator("tags")
     @classmethod
@@ -438,6 +482,11 @@ class BundleCardIn(BaseModel):
     @classmethod
     def _clean_hint(cls, v: str | None) -> str | None:
         return clean_hint(v)
+
+    @field_validator("image_url")
+    @classmethod
+    def _clean_image(cls, v: str | None) -> str | None:
+        return clean_image_url(v)
 
 
 class DeckBundleIn(BaseModel):
@@ -480,6 +529,7 @@ class PublicCardOut(BaseModel):
     back: str
     tags: list[str] = []
     hint: str | None = None
+    image_url: str | None = None
 
 
 class PublicDeckOut(BaseModel):

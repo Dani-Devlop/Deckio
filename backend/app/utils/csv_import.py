@@ -7,13 +7,14 @@ Accepted formats (delimiter auto-detected: comma, semicolon or tab):
     What is FastAPI?;A modern async Python web framework
     hola,hello,vocabulary|basics          ← optional 3rd column = tags
     hola,hello,vocabulary,think "oh-la"   ← optional 4th column = hint
+    hola,hello,,,"https://...jpg"         ← optional 5th column = image URL
 
 An optional header row is tolerated; it is detected when the first cells are
-column names (front/back/question/answer/tags/hint/...). The optional third
-column holds tags separated by `|` (e.g. `verbs|beginner`); the optional
-fourth column is a hint shown on the question side while studying. Exact
-duplicate rows within a file are silently de-duplicated; invalid rows are
-reported with row numbers.
+column names (front/back/question/answer/tags/hint/image/...). The optional
+third column holds tags separated by `|` (e.g. `verbs|beginner`); the optional
+fourth column is a hint shown on the question side while studying; the fifth
+is an image URL rendered above the text. Exact duplicate rows within a file
+are silently de-duplicated; invalid rows are reported with row numbers.
 """
 
 import csv
@@ -22,9 +23,10 @@ import io
 MAX_FRONT_LEN = 1000
 MAX_BACK_LEN = 2000
 MAX_HINT_LEN = 300
+MAX_IMAGE_URL_LEN = 500
 MAX_ROWS_PER_IMPORT = 1000
 
-CsvCard = tuple[str, str, list[str], str | None]  # (front, back, tags, hint)
+CsvCard = tuple[str, str, list[str], str | None, str | None]  # (front, back, tags, hint, image_url)
 
 _HEADER_TOKENS = {
     "front",
@@ -39,6 +41,9 @@ _HEADER_TOKENS = {
     "response",
     "tags",  # optional 3rd column
     "hint",  # optional 4th column
+    "image",  # optional 5th column
+    "image_url",
+    "picture",
 }
 
 
@@ -46,7 +51,7 @@ def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
     """Parse raw CSV text into `(cards, errors)`.
 
     Returns:
-        cards:  validated (front, back, tags, hint) tuples, de-duplicated, in file order.
+        cards:  validated (front, back, tags, hint, image_url) tuples, de-duplicated, in file order.
         errors: human-readable messages with row numbers for the UI.
     """
     errors: list[str] = []
@@ -98,11 +103,26 @@ def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
         if len(row) >= 4:
             hint = row[3].strip()[:MAX_HINT_LEN] or None
 
+        # Optional fifth column: image URL (light scheme check, empty → None).
+        image_url: str | None = None
+        if len(row) >= 5:
+            raw_url = row[4].strip()
+            if raw_url:
+                if len(raw_url) > MAX_IMAGE_URL_LEN:
+                    errors.append(f"Row {i}: image URL exceeds {MAX_IMAGE_URL_LEN} characters.")
+                    continue
+                if not raw_url.lower().startswith(("http://", "https://", "data:image/", "//", "/")):
+                    errors.append(
+                        f"Row {i}: image URL must start with http://, https://, data:image/ or / "
+                    )
+                    continue
+                image_url = raw_url
+
         pair = (front, back)
         if pair in seen:
             continue  # silent duplicate skip
         seen.add(pair)
-        cards.append((front, back, tags, hint))
+        cards.append((front, back, tags, hint, image_url))
 
     return cards, errors
 

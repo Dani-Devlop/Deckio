@@ -77,7 +77,15 @@ async def start_quiz(
         distractors = [b for b in pool if b != correct][:3]
         options = distractors + [correct]
         random.shuffle(options)  # never reveal the correct answer by position
-        questions.append(QuizQuestion(card_id=card.id, front=card.front, options=options, hint=card.hint))
+        questions.append(
+            QuizQuestion(
+                card_id=card.id,
+                front=card.front,
+                options=options,
+                hint=card.hint,
+                image_url=card.image_url,
+            )
+        )
 
     session = StudySession(user_id=user.id, deck_id=deck.id, mode="quiz", total_planned=len(questions))
     db.add(session)

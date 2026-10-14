@@ -55,6 +55,7 @@ async def public_deck(token: str, db: AsyncSession = Depends(get_db)) -> PublicD
                 back=c.back,
                 tags=[t.strip() for t in (c.tags or "").split(",") if t.strip()],
                 hint=c.hint,
+                image_url=c.image_url,
             )
             for c in cards
         ],
