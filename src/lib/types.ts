@@ -6,6 +6,7 @@ export type ReviewResult = "correct" | "wrong";
 export interface User {
   id: number;
   email: string;
+  daily_goal: number; // reviews/day — powers the stats goal ring
   created_at: string;
 }
 
@@ -28,6 +29,7 @@ export interface Deck {
   accuracy: number | null;
   last_studied_at: string | null;
   due_count: number;
+  share_token: string | null; // public read-only link token (null = private)
 }
 
 export interface DeckInput {
@@ -44,6 +46,7 @@ export interface Card {
   front: string;
   back: string;
   tags: string[];
+  hint: string | null; // optional memory aid shown before flipping
   created_at: string;
   // Spaced-repetition state (read-only, for UI chips):
   ease: number;
@@ -57,6 +60,7 @@ export interface CardInput {
   front?: string;
   back?: string;
   tags?: string[];
+  hint?: string | null; // null clears the hint
 }
 
 export interface BulkImportResult {
@@ -104,7 +108,30 @@ export interface DeckBundle {
   color: string;
   icon: string;
   card_count: number;
-  cards: { front: string; back: string; tags: string[] }[];
+  cards: { front: string; back: string; tags: string[]; hint?: string | null }[];
+}
+
+// ------------------------- Public share links -------------------------
+export interface ShareLink {
+  share_token: string | null;
+  share_path: string | null; // e.g. "/?share=abc123"
+}
+
+export interface PublicCard {
+  front: string;
+  back: string;
+  tags: string[];
+  hint: string | null;
+}
+
+/** Read-only deck preview fetched via a share token (no auth). */
+export interface PublicDeck {
+  title: string;
+  description: string | null;
+  color: string;
+  icon: string;
+  card_count: number;
+  cards: PublicCard[];
 }
 
 // ----------------------------- Study -----------------------------
@@ -137,6 +164,7 @@ export interface QuizQuestion {
   card_id: number;
   front: string;
   options: string[];
+  hint: string | null;
 }
 
 export interface QuizStart {
@@ -194,6 +222,8 @@ export interface StatsOverview {
   streak_days: number;
   mastered_cards: number;
   due_cards: number;
+  today_reviews: number; // reviews completed today (UTC) — goal ring progress
+  daily_goal: number; // user's configured daily review goal
   activity: ActivityDay[]; // ascending, window = `days` query param (7 default)
 }
 

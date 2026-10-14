@@ -23,6 +23,7 @@ import { AuthView } from "./auth-view";
 import { CommandPalette, openCommandPalette } from "./command-palette";
 import { DashboardView } from "./dashboard-view";
 import { DeckDetailView } from "./deck-detail-view";
+import { PublicDeckView } from "./public-deck-view";
 import { QuizView } from "./quiz-view";
 import { StatsView } from "./stats-view";
 import { StudyView } from "./study-view";
@@ -170,15 +171,65 @@ function BootSplash() {
   );
 }
 
+/** sessionStorage key preserving a share link through the sign-in round-trip. */
+const SHARE_PENDING_KEY = "deckio_pending_share";
+
 /** Root client component: boots the session and switches between SPA views. */
 export function DeckioApp() {
   const { booted, user, view, activeDeckId, boot } = useAppStore();
+  // `/?share=<token>` — public read-only deck preview (works logged-in or not).
+  const [shareToken, setShareToken] = useState<string | null>(null);
 
   useEffect(() => {
     boot().catch(() => toast.error("Failed to initialize the app"));
+    const param = new URLSearchParams(window.location.search).get("share");
+    if (param) {
+      // Read-once URL parse — safe to set synchronously here (client-only SPA).
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setShareToken(param);
+      window.sessionStorage.setItem(SHARE_PENDING_KEY, param);
+    }
   }, [boot]);
 
+  /** Leave the share preview for good (clears state, URL and pending marker). */
+  const closeShare = () => {
+    setShareToken(null);
+    window.sessionStorage.removeItem(SHARE_PENDING_KEY);
+    window.history.replaceState(null, "", window.location.pathname);
+  };
+
+  /** Anonymous visitor heading to sign-in: park the token so the preview can
+   * be restored right after login ("Sign in to import" flow). */
+  const shareSignIn = () => {
+    if (shareToken) window.sessionStorage.setItem(SHARE_PENDING_KEY, shareToken);
+    setShareToken(null);
+    window.history.replaceState(null, "", window.location.pathname);
+  };
+
+  // Restore a parked share preview once the user is signed in again.
+  useEffect(() => {
+    if (!user || shareToken) return;
+    const pending = window.sessionStorage.getItem(SHARE_PENDING_KEY);
+    if (pending) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setShareToken(pending);
+      window.history.replaceState(null, "", `/?share=${pending}`);
+    }
+  }, [user, shareToken]);
+
   if (!booted) return <BootSplash />;
+
+  // Share previews take over the whole page (own header, no nav chrome).
+  if (shareToken) {
+    return (
+      <div className="flex min-h-screen flex-col bg-background">
+        <main className="flex-1">
+          <PublicDeckView token={shareToken} onClose={closeShare} onSignIn={shareSignIn} />
+        </main>
+        <SiteFooter />
+      </div>
+    );
+  }
 
   // key on view+deck so switching views replays the entrance animation
   const viewKey = user ? `${view}-${activeDeckId ?? 0}` : "auth";

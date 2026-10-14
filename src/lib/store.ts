@@ -16,6 +16,8 @@ interface AppState {
   studySrs: boolean;
   boot: () => Promise<void>;
   setAuth: (user: User, token: string) => void;
+  /** Replace the cached user row (e.g. after changing the daily goal). */
+  updateUser: (user: User) => void;
   logout: () => void;
   go: (view: ViewName, deckId?: number | null) => void;
   /** Navigate into study mode, optionally as a smart spaced-repetition session. */
@@ -47,6 +49,8 @@ export const useAppStore = create<AppState>((set) => ({
     setAuthToken(token);
     set({ user, view: "decks", activeDeckId: null });
   },
+
+  updateUser: (user) => set({ user }),
 
   logout: () => {
     setAuthToken(null);

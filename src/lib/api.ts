@@ -13,6 +13,7 @@ import type {
   DeckBundle,
   DeckInput,
   DeckStats,
+  PublicDeck,
   QuizAnswerOut,
   QuizResult,
   QuizStart,
@@ -20,6 +21,7 @@ import type {
   ReviewResult,
   SearchResults,
   SessionSummary,
+  ShareLink,
   StatsOverview,
   StudyNext,
   StudyStart,
@@ -146,6 +148,8 @@ export const api = {
     }),
   deleteAccount: (password: string) =>
     request<void>("POST", "/api/auth/account/delete", { password }),
+  setGoal: (dailyGoal: number) =>
+    request<User>("PUT", "/api/auth/goal", { daily_goal: dailyGoal }),
 
   // ---- Decks ----
   decks: {
@@ -158,8 +162,16 @@ export const api = {
     importBundle: (bundle: DeckBundle) =>
       request<Deck>("POST", "/api/decks/import", bundle),
     exportBundle: (id: number) => request<DeckBundle>("GET", `/api/decks/${id}/bundle`),
+    getShare: (id: number) => request<ShareLink>("GET", `/api/decks/${id}/share`),
+    createShare: (id: number, regenerate = false) =>
+      request<ShareLink>("POST", `/api/decks/${id}/share${regenerate ? "?regenerate=true" : ""}`),
+    revokeShare: (id: number) => request<void>("DELETE", `/api/decks/${id}/share`),
     remove: (id: number) => request<void>("DELETE", `/api/decks/${id}`),
   },
+
+  // ---- Public share previews (no auth) ----
+  publicDeck: (token: string) =>
+    request<PublicDeck>("GET", `/api/public/decks/${encodeURIComponent(token)}`),
 
   // ---- Cards ----
   cards: {

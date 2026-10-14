@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -10,15 +10,29 @@ import {
   History,
   Layers,
   LineChart,
+  Loader2,
+  Pencil,
   Play,
   Sparkles,
   Target,
   Trophy,
   Zap,
 } from "lucide-react";
+import { motion } from "framer-motion";
+import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Slider } from "@/components/ui/slider";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api } from "@/lib/api";
 import { accuracyBg, accuracyColor, dayLabel, formatDuration, timeAgo } from "@/lib/format";
@@ -170,14 +184,58 @@ function Kpi({
   );
 }
 
+/** Animated SVG progress ring for the daily goal (emerald when complete). */
+function GoalRing({ today, goal }: { today: number; goal: number }) {
+  const pct = goal > 0 ? Math.min(1, today / goal) : 0;
+  const done = today >= goal && goal > 0;
+  const SIZE = 132;
+  const STROKE = 11;
+  const R = (SIZE - STROKE) / 2;
+  const CIRC = 2 * Math.PI * R;
+
+  return (
+    <div className="relative" style={{ width: SIZE, height: SIZE }} role="img"
+      aria-label={`Daily goal: ${today} of ${goal} reviews (${Math.round(pct * 100)}%)`}>
+      <svg width={SIZE} height={SIZE} className="-rotate-90">
+        <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none" strokeWidth={STROKE}
+          className="stroke-muted" />
+        <motion.circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={R}
+          fill="none"
+          strokeWidth={STROKE}
+          strokeLinecap="round"
+          stroke={done ? "#10b981" : "#f59e0b"}
+          strokeDasharray={CIRC}
+          initial={{ strokeDashoffset: CIRC }}
+          animate={{ strokeDashoffset: CIRC * (1 - pct) }}
+          transition={{ duration: 0.9, ease: "easeOut" }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        {done ? (
+          <span className="text-3xl" aria-hidden>🎉</span>
+        ) : (
+          <p className="text-2xl font-bold tabular-nums">{today}<span className="text-sm font-medium text-muted-foreground">/{goal}</span></p>
+        )}
+        <p className="text-[11px] text-muted-foreground">{done ? "Goal reached!" : "reviews today"}</p>
+      </div>
+    </div>
+  );
+}
+
 /** Learning analytics: overview KPIs, 7-day activity, weak cards, deck breakdown. */
 export function StatsView() {
   const go = useAppStore((s) => s.go);
+  const updateUser = useAppStore((s) => s.updateUser);
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [weak, setWeak] = useState<WeakCard[] | null>(null);
   const [decks, setDecks] = useState<Deck[] | null>(null);
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [goalOpen, setGoalOpen] = useState(false);
+  const goalToastFired = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -203,6 +261,19 @@ export function StatsView() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
+
+  // Celebrate hitting the daily goal — at most once per visit to this view.
+  useEffect(() => {
+    if (
+      overview &&
+      overview.daily_goal > 0 &&
+      overview.today_reviews >= overview.daily_goal &&
+      !goalToastFired.current
+    ) {
+      goalToastFired.current = true;
+      toast.success(`Daily goal reached — ${overview.today_reviews} reviews today! 🎉`);
+    }
+  }, [overview]);
 
   if (error) {
     return (
@@ -246,6 +317,54 @@ export function StatsView() {
       <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
         <LineChart className="h-6 w-6 text-amber-500" /> Learning stats
       </h1>
+
+      {/* ---------- Daily goal ring ---------- */}
+      <section className="mt-6 rounded-2xl border bg-card p-6" aria-label="Daily review goal">
+        <div className="flex flex-col items-center gap-6 sm:flex-row sm:gap-8">
+          <GoalRing today={overview.today_reviews} goal={overview.daily_goal} />
+          <div className="min-w-0 flex-1 text-center sm:text-left">
+            <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+              <h2 className="flex items-center gap-2 font-semibold">
+                <Target className="h-4.5 w-4.5 text-amber-500" /> Daily goal
+              </h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+                onClick={() => setGoalOpen(true)}
+              >
+                <Pencil className="h-3 w-3" /> Edit
+              </Button>
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {overview.today_reviews >= overview.daily_goal ? (
+                <>
+                  🎉 <span className="font-semibold text-emerald-600">Goal reached!</span>{" "}
+                  {overview.today_reviews} reviews today — every extra one is a bonus for
+                  tomorrow&apos;s memory.
+                </>
+              ) : overview.today_reviews > 0 ? (
+                <>
+                  <span className="font-semibold text-foreground">
+                    {overview.daily_goal - overview.today_reviews} more
+                  </span>{" "}
+                  review{overview.daily_goal - overview.today_reviews === 1 ? "" : "s"} to hit
+                  today&apos;s goal — a quick smart review should do it.
+                </>
+              ) : (
+                <>
+                  No reviews yet today — {overview.daily_goal} is today&apos;s target. You&apos;ve got
+                  this! 💪
+                </>
+              )}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Current streak: {overview.streak_days} day{overview.streak_days === 1 ? "" : "s"} ·{" "}
+              {overview.due_cards} card{overview.due_cards === 1 ? "" : "s"} due right now
+            </p>
+          </div>
+        </div>
+      </section>
 
       {/* ---------- KPI grid ---------- */}
       <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -508,6 +627,121 @@ export function StatsView() {
           </ul>
         )}
       </section>
+
+      {/* ---------- Edit daily goal ---------- */}
+      <GoalEditDialog
+        open={goalOpen}
+        onOpenChange={setGoalOpen}
+        current={overview.daily_goal}
+        onSaved={(updated) => {
+          updateUser(updated);
+          setOverview((o) => (o ? { ...o, daily_goal: updated.daily_goal } : o));
+        }}
+      />
     </div>
+  );
+}
+
+/** Edit the daily review goal — slider + presets, saved via PUT /auth/goal. */
+function GoalEditDialog({
+  open,
+  onOpenChange,
+  current,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  current: number;
+  onSaved: (user: import("@/lib/types").User) => void;
+}) {
+  const [value, setValue] = useState(current);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (open) setValue(current);
+  }, [current, open]);
+
+  async function save() {
+    const goal = Math.max(1, Math.min(500, Math.round(value)));
+    setBusy(true);
+    try {
+      const updated = await api.setGoal(goal);
+      onSaved(updated);
+      toast.success(`Daily goal set to ${goal} reviews`);
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Failed to update the goal.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const presets = [10, 20, 30, 50, 100];
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Target className="h-4.5 w-4.5 text-amber-500" /> Daily review goal
+          </DialogTitle>
+          <DialogDescription>
+            A small daily target keeps the streak alive. Reviews in study and quiz sessions both
+            count.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5">
+          <div className="flex items-center justify-center gap-2">
+            <Input
+              type="number"
+              min={1}
+              max={500}
+              value={value}
+              onChange={(e) => setValue(Number(e.target.value))}
+              className="w-24 text-center text-lg font-bold"
+              aria-label="Daily goal in reviews"
+            />
+            <span className="text-sm text-muted-foreground">reviews / day</span>
+          </div>
+          <Slider
+            value={[Math.min(value, 200)]}
+            min={1}
+            max={200}
+            step={1}
+            onValueChange={(v) => setValue(v[0])}
+            aria-label="Daily goal slider"
+          />
+          <div className="flex flex-wrap justify-center gap-1.5">
+            {presets.map((p) => (
+              <button
+                key={p}
+                onClick={() => setValue(p)}
+                className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                  value === p
+                    ? "border-amber-400 bg-amber-100 text-amber-800 dark:border-amber-500/50 dark:bg-amber-500/15 dark:text-amber-300"
+                    : "text-muted-foreground hover:border-amber-300 hover:text-foreground"
+                }`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => void save()}
+            disabled={busy || !Number.isFinite(value) || value < 1 || value > 500}
+            className="bg-amber-500 text-white hover:bg-amber-600"
+          >
+            {busy && <Loader2 className="h-4 w-4 animate-spin" />} Save goal
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

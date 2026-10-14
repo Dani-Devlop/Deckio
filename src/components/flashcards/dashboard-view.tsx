@@ -7,6 +7,7 @@ import {
   Clock,
   CopyPlus,
   FileDown,
+  Globe,
   Loader2,
   MoreVertical,
   Pencil,
@@ -46,6 +47,8 @@ import { ApiError, api } from "@/lib/api";
 import { accuracyColor, timeAgo } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
 import type { Deck, DeckBundle, StatsOverview } from "@/lib/types";
+
+import { ShareDialog } from "./share-dialog";
 
 export const DECK_COLORS = ["#f59e0b", "#f97316", "#f43f5e", "#10b981", "#14b8a6", "#8b5cf6"];
 export const DECK_ICONS = ["📚", "🧠", "🌱", "⚡", "🎯", "💼", "🗣️", "🧪", "🎨", "🧮", "🌍", "🏰"];
@@ -210,6 +213,7 @@ function DeckCard({
   onEdit,
   onDuplicate,
   onExportBundle,
+  onShare,
   onDelete,
   duplicating,
 }: {
@@ -221,6 +225,7 @@ function DeckCard({
   onEdit: () => void;
   onDuplicate: () => void;
   onExportBundle: () => void;
+  onShare: () => void;
   onDelete: () => void;
   duplicating: boolean;
 }) {
@@ -285,6 +290,14 @@ function DeckCard({
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={onEdit}>
                 <Pencil className="h-4 w-4" /> Edit deck
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onShare}>
+                <Globe className="h-4 w-4" /> Share link
+                {deck.share_token && (
+                  <span className="ml-auto rounded-full bg-emerald-100 px-1.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+                    on
+                  </span>
+                )}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={onDuplicate} disabled={deck.card_count === 0}>
                 <CopyPlus className="h-4 w-4" /> Duplicate
@@ -357,6 +370,7 @@ export function DashboardView() {
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [duplicating, setDuplicating] = useState<number | null>(null);
   const [importingBundle, setImportingBundle] = useState(false);
+  const [sharing, setSharing] = useState<Deck | null>(null);
   const bundleInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -638,6 +652,7 @@ export function DashboardView() {
               }}
               onDuplicate={() => void duplicate(deck)}
               onExportBundle={() => void exportBundle(deck)}
+              onShare={() => setSharing(deck)}
               duplicating={duplicating === deck.id}
               onDelete={() => setDeleting(deck)}
             />
@@ -651,6 +666,15 @@ export function DashboardView() {
         onOpenChange={setFormOpen}
         deck={editing}
         onSaved={() => void load()}
+      />
+
+      <ShareDialog
+        deck={sharing}
+        open={sharing !== null}
+        onOpenChange={(o) => !o && setSharing(null)}
+        onUpdated={(updated) =>
+          setDecks((ds) => (ds ? ds.map((d) => (d.id === updated.id ? updated : d)) : ds))
+        }
       />
 
       <AlertDialog open={deleting !== null} onOpenChange={(o) => !o && setDeleting(null)}>

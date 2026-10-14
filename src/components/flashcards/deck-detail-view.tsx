@@ -10,6 +10,8 @@ import {
   Download,
   FileDown,
   FileUp,
+  Globe,
+  Lightbulb,
   Loader2,
   MoreVertical,
   Pencil,
@@ -47,6 +49,7 @@ import { useAppStore } from "@/lib/store";
 import type { BulkImportResult, Card, Deck, DeckBundle } from "@/lib/types";
 
 import { DeckFormDialog } from "./dashboard-view";
+import { ShareDialog } from "./share-dialog";
 import { TagEditor } from "./tag-editor";
 
 /** Add / edit a single card. */
@@ -66,6 +69,7 @@ function CardFormDialog({
   const [front, setFront] = useState("");
   const [back, setBack] = useState("");
   const [tags, setTags] = useState<string[]>([]);
+  const [hint, setHint] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,6 +78,7 @@ function CardFormDialog({
       setFront(card?.front ?? "");
       setBack(card?.back ?? "");
       setTags(card?.tags ?? []);
+      setHint(card?.hint ?? "");
       setError(null);
     }
   }, [card, open]);
@@ -86,10 +91,20 @@ function CardFormDialog({
     setBusy(true);
     try {
       if (card) {
-        await api.cards.update(card.id, { front: front.trim(), back: back.trim(), tags });
+        await api.cards.update(card.id, {
+          front: front.trim(),
+          back: back.trim(),
+          tags,
+          hint: hint.trim() || null, // null clears the hint
+        });
         toast.success("Card updated");
       } else {
-        await api.cards.create(deckId, { front: front.trim(), back: back.trim(), tags });
+        await api.cards.create(deckId, {
+          front: front.trim(),
+          back: back.trim(),
+          tags,
+          hint: hint.trim() || null,
+        });
         toast.success("Card added");
       }
       onOpenChange(false);
@@ -139,6 +154,20 @@ function CardFormDialog({
           <div className="space-y-1.5">
             <Label htmlFor="card-tags">Tags (optional)</Label>
             <TagEditor id="card-tags" tags={tags} onChange={setTags} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="card-hint" className="flex items-center gap-1">
+              <Lightbulb className="h-3.5 w-3.5 text-amber-500" /> Hint (optional)
+            </Label>
+            <Textarea
+              id="card-hint"
+              rows={2}
+              maxLength={300}
+              placeholder="A nudge shown before flipping — e.g. “sounds like mare-see”"
+              value={hint}
+              onChange={(e) => setHint(e.target.value)}
+            />
+            <p className="text-right text-xs text-muted-foreground">{hint.length}/300</p>
           </div>
           {error && <p className="text-sm text-rose-600">{error}</p>}
         </div>
@@ -317,6 +346,7 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
   const [deleteDeckOpen, setDeleteDeckOpen] = useState(false);
   const [busyDelete, setBusyDelete] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -532,6 +562,14 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                   >
                     <Pencil className="h-4 w-4" /> Edit deck
                   </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setShareOpen(true)}>
+                    <Globe className="h-4 w-4" /> Share link
+                    {deck.share_token && (
+                      <span className="ml-auto rounded-full bg-emerald-100 px-1.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+                        on
+                      </span>
+                    )}
+                  </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setImportOpen(true)}>
                     <FileUp className="h-4 w-4" /> Import CSV
                   </DropdownMenuItem>
@@ -573,6 +611,15 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
             {deck.due_count > 0 && (
               <Badge className="gap-1.5 bg-amber-500 py-1.5 text-white hover:bg-amber-500">
                 <Sparkles className="h-3.5 w-3.5" /> {deck.due_count} due for review
+              </Badge>
+            )}
+            {deck.share_token && (
+              <Badge
+                variant="secondary"
+                className="gap-1.5 py-1.5 text-emerald-700 dark:text-emerald-400"
+                title="This deck has a public read-only share link"
+              >
+                <Globe className="h-3.5 w-3.5" /> shared
               </Badge>
             )}
           </div>
@@ -696,6 +743,15 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                 >
                   <p className="truncate font-medium">{card.front}</p>
                   <p className="mt-0.5 truncate text-sm text-muted-foreground">{card.back}</p>
+                  {card.hint && (
+                    <p
+                      className="mt-1 flex max-w-lg items-start gap-1 truncate text-xs italic text-muted-foreground"
+                      title={`Hint: ${card.hint}`}
+                    >
+                      <Lightbulb className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
+                      <span className="truncate">{card.hint}</span>
+                    </p>
+                  )}
                   {card.tags.length > 0 && (
                     <span className="mt-1.5 flex flex-wrap gap-1">
                       {card.tags.slice(0, 3).map((t) => (
@@ -767,6 +823,12 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
         onImported={() => void load()}
       />
       <DeckFormDialog open={editDeckOpen} onOpenChange={setEditDeckOpen} deck={deck} onSaved={() => void load()} />
+      <ShareDialog
+        deck={deck}
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        onUpdated={(updated) => setDeck(updated)}
+      />
 
       {/* delete card */}
       <AlertDialog open={deletingCard !== null} onOpenChange={(o) => !o && setDeletingCard(null)}>

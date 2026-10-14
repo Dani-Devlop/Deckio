@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Loader2, RotateCcw, Sparkles, Trophy, X } from "lucide-react";
+import { ArrowLeft, Check, Lightbulb, Loader2, RotateCcw, Sparkles, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { motion } from "framer-motion";
 import { ApiError, api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import type { StudyNext, StudyStart } from "@/lib/types";
@@ -24,6 +25,7 @@ export function StudyView({ deckId }: { deckId: number }) {
   const [phase, setPhase] = useState<"loading" | "playing" | "done" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [hintShown, setHintShown] = useState(false); // per-card, reset on next
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
@@ -65,6 +67,7 @@ export function StudyView({ deckId }: { deckId: number }) {
         } else {
           const nc = await api.study.next(deckId, session.session_id);
           setFlipped(false);
+          setHintShown(false); // fresh card → hint hidden again
           setCurrent(nc);
         }
       } catch (e) {
@@ -159,6 +162,7 @@ export function StudyView({ deckId }: { deckId: number }) {
                   setSession((prev) => prev && { ...prev, session_id: n.session_id });
                   setCurrent(n);
                   setFlipped(false);
+                  setHintShown(false);
                   setPhase("playing");
                 })
                 .catch(() => {
@@ -224,6 +228,16 @@ export function StudyView({ deckId }: { deckId: number }) {
               Question
             </span>
             <p className="text-xl font-medium leading-relaxed sm:text-2xl">{card?.front}</p>
+            {card?.hint && hintShown && (
+              <motion.p
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex max-w-md items-start justify-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-sm italic text-amber-800 dark:bg-amber-500/10 dark:text-amber-300"
+              >
+                <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                {card.hint}
+              </motion.p>
+            )}
             <span className="absolute bottom-5 text-xs text-muted-foreground">
               Click card or press <kbd className="rounded border bg-muted px-1.5 py-0.5">Space</kbd> to flip
             </span>
@@ -243,6 +257,26 @@ export function StudyView({ deckId }: { deckId: number }) {
           </div>
         </button>
       </div>
+
+      {/* ---------- Hint (question side only) ---------- */}
+      {card?.hint && !flipped && (
+        <div className="mt-3 flex justify-center">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`h-8 gap-1.5 text-xs ${
+              hintShown
+                ? "text-amber-700 dark:text-amber-400"
+                : "text-muted-foreground hover:text-amber-600"
+            }`}
+            onClick={() => setHintShown((h) => !h)}
+            aria-pressed={hintShown}
+          >
+            <Lightbulb className="h-3.5 w-3.5" />
+            {hintShown ? "Hide hint" : "Need a hint?"}
+          </Button>
+        </div>
+      )}
 
       {/* ---------- Grade buttons ---------- */}
       <div className="mt-6 grid grid-cols-2 gap-3">

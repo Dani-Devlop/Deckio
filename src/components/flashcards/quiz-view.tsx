@@ -1,12 +1,13 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { ArrowLeft, Brain, Check, Loader2, RotateCcw, Settings2, Trophy, X } from "lucide-react";
+import { ArrowLeft, Brain, Check, Lightbulb, Loader2, RotateCcw, Settings2, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { motion } from "framer-motion";
 import { ApiError, api } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
@@ -27,6 +28,7 @@ export function QuizView({ deckId }: { deckId: number }) {
   const [result, setResult] = useState<QuizResult | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [limit, setLimit] = useState<number | null>(10); // null = every card
+  const [hintShown, setHintShown] = useState(false); // per-question, reset on advance
   const advancing = useRef(false);
 
   const fetchQuiz = useCallback(
@@ -99,6 +101,7 @@ export function QuizView({ deckId }: { deckId: number }) {
           setIndex((i) => i + 1);
           setSelected(null);
           setCorrectAnswer(null);
+          setHintShown(false); // fresh question → hint hidden again
         }
       }, res.correct ? 750 : 1300);
     } catch (e) {
@@ -310,7 +313,31 @@ export function QuizView({ deckId }: { deckId: number }) {
           Which answer is correct?
         </span>
         <p className="mt-3 text-xl font-medium leading-relaxed sm:text-2xl">{q?.front}</p>
+        {q?.hint && hintShown && (
+          <motion.p
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mx-auto mt-3 flex max-w-md items-start justify-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-sm italic text-amber-800 dark:bg-amber-500/10 dark:text-amber-300"
+          >
+            <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+            {q.hint}
+          </motion.p>
+        )}
       </div>
+
+      {/* ---------- Hint reveal (hides itself once used) ---------- */}
+      {q?.hint && selected === null && !hintShown && (
+        <div className="mt-3 flex justify-center">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-amber-600"
+            onClick={() => setHintShown(true)}
+          >
+            <Lightbulb className="h-3.5 w-3.5" /> Need a hint?
+          </Button>
+        </div>
+      )}
 
       {/* ---------- Options ---------- */}
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
