@@ -27,13 +27,14 @@ exposed through a clean REST API and bundled with a polished web client.
 - 🔐 **JWT authentication** — register / login, bcrypt-hashed passwords, bearer-token sessions, brute-force rate limiting on credential endpoints
 - 👤 **Account management** — password change (re-verifies current) and self-service account deletion with cascade cleanup
 - 🗂 **Deck management** — CRUD with color accents, emoji icons, search, sorting, live stats, **one-click duplication** (cards copied, SRS progress reset)
-- 🃏 **Flashcards** — CRUD per deck, free-form **tags** (max 8/card), plus **CSV bulk import & export** (delimiter auto-detection, per-row error reports, round-trip files incl. tags)
+- 🃏 **Flashcards** — CRUD per deck, free-form **tags** (max 8/card), optional **hints** (memory aids shown before flipping), plus **CSV bulk import & export** (delimiter auto-detection, per-row error reports, round-trip files incl. tags & hints)
 - 🔎 **Global search (⌘K)** — command palette searching decks, card text and tags, with quick actions
-- 🔗 **Deck bundles** — export any deck as a portable JSON bundle (cards + tags) and import it on any account — deck sharing made easy
+- 🔗 **Deck bundles** — export any deck as a portable JSON bundle (cards + tags + hints) and import it on any account — deck sharing made easy
+- 🌐 **Public share links** — one-click read-only deck preview (`/?share=<token>`) that works without an account; rotate or revoke anytime, with a built-in **Import this deck** CTA
 - 📖 **Study mode** — server-tracked sessions, random card order, self-grading, progress resume
 - ✨ **Spaced repetition (SM-2)** — *Smart review* sessions cover only due cards; correct answers grow the interval (1d → 3d → interval × ease), lapses reschedule in 10 minutes
 - 🧠 **Quiz mode** — auto-generated questions with **4 options** (1 correct + 3 distractors), pickable quiz length (5 / 10 / 15 / all), instant feedback, full result breakdown
-- 📊 **Analytics** — accuracy, review streaks, **26-week review heatmap**, 7-day activity, mastered cards, per-deck stats, **weak-card detection**, recent-session history
+- 📊 **Analytics** — accuracy, review streaks, **26-week review heatmap**, 7-day activity, mastered cards, per-deck stats, **weak-card detection**, recent-session history, **daily goal ring** with celebration
 - 🖥 **Web app included** — responsive, dark-mode ready client that speaks to the API out of the box
 - 🐳 **One-command deployment** — `docker compose up --build`
 
@@ -132,15 +133,18 @@ Full reference with examples: **[docs/API.md](docs/API.md)** · Interactive: **`
 | `GET` | `/auth/me` | Current user (session restore) |
 | `PUT` | `/auth/password` | **Change password** (re-verifies current) |
 | `POST` | `/auth/account/delete` | **Delete account** (password-confirmed, cascades) |
+| `PUT` | `/auth/goal` | **Set the daily review goal** (1–500 reviews/day) |
 | `GET` | `/decks` | List decks with card counts & accuracy |
 | `POST` | `/decks` | Create deck |
 | `GET/PUT/DELETE` | `/decks/{id}` | Read / update / delete deck |
-| `POST` | `/decks/{id}/duplicate` | **Duplicate deck** (cards copied incl. tags, SRS reset) |
-| `GET` | `/decks/{id}/bundle` | **Export deck as JSON bundle** (cards + tags, shareable) |
+| `POST` | `/decks/{id}/duplicate` | **Duplicate deck** (cards copied incl. tags & hints, SRS reset) |
+| `GET/POST/DELETE` | `/decks/{id}/share` | **Public share link** — get / create (`?regenerate=true` rotates) / revoke |
+| `GET` | `/decks/{id}/bundle` | **Export deck as JSON bundle** (cards + tags + hints, shareable) |
 | `POST` | `/decks/import` | **Import a deck bundle** (creates deck + cards, SRS reset) |
+| `GET` | `/public/decks/{token}` | **Read-only deck preview by share token** — no authentication |
 | `GET` | `/decks/{id}/cards` | List cards (`?q=` text search, `?tag=` exact tag filter) |
 | `POST` | `/decks/{id}/cards` | Add card (with optional `tags` array) |
-| `GET` | `/decks/{id}/cards/export` | **Export deck as CSV** (`front,back[,tags]`) |
+| `GET` | `/decks/{id}/cards/export` | **Export deck as CSV** (`front,back[,tags][,hint]`) |
 | `POST` | `/decks/{id}/cards/bulk` | **CSV bulk import** (multipart `file` or raw `text/csv`) |
 | `PUT/DELETE` | `/cards/{id}` | Update / delete card |
 | `POST` | `/decks/{id}/study/start` | Open a study session (`?srs=true` → only due cards) |
@@ -149,7 +153,7 @@ Full reference with examples: **[docs/API.md](docs/API.md)** · Interactive: **`
 | `POST` | `/decks/{id}/quiz/start` | Generate questions (1 correct + 3 distractors, `?limit=`) |
 | `POST` | `/quiz/answer` | Submit an answer (validated server-side) |
 | `GET` | `/quiz/{session_id}/result` | Score, duration, per-question breakdown |
-| `GET` | `/stats/overview` | Totals, accuracy, streak, activity window (`?days=`, 7–366), mastered cards |
+| `GET` | `/stats/overview` | Totals, accuracy, streak, activity window (`?days=`, 7–366), mastered cards, **today's progress vs daily goal** |
 | `GET` | `/stats/sessions` | **Recent sessions** across all decks (`?limit=`, newest first) |
 | `GET` | `/stats/decks/{id}` | Per-deck stats + recent sessions |
 | `GET` | `/stats/weak-cards` | Cards with the lowest accuracy |
@@ -166,11 +170,13 @@ What does ORM stand for?,Object-Relational Mapping
 ¿Cómo se dice "hello" en español?;hola        ← semicolons also work
 front<tab>back                                ← and tabs; header row optional
 hola,hello,greetings|a1                       ← optional 3rd column = tags (| separated)
+hola,hello,greetings,think “oh-la”            ← optional 4th column = hint
 ```
 
 - Delimiter **auto-detected** (comma / semicolon / tab), quotes supported
 - Optional header row is recognized (`front,back`, `question,answer`, …)
 - Optional **tags column** — `|`-separated inside the cell; CSV export includes it back when any card has tags
+- Optional **hint column** — memory aid shown before flipping; export includes it when any card has one
 - Invalid rows are reported **with row numbers**; exact duplicates are skipped
 - Limits: 1 MB per upload, 1000 cards per import
 
@@ -183,10 +189,31 @@ The web client renders them as chips on each card, offers a **filter row** per d
 
 ## 🔗 Deck bundles (share)
 
-`GET /decks/{id}/bundle` downloads a portable JSON snapshot (deck metadata + cards + tags,
-no SRS history). Send the file to a friend (or your other account) and `POST /decks/import`
+`GET /decks/{id}/bundle` downloads a portable JSON snapshot (deck metadata + cards + tags +
+hints, no SRS history). Send the file to a friend (or your other account) and `POST /decks/import`
 creates a fresh copy with all cards due immediately. The web UI wraps both directions:
 **Export bundle (JSON)** in every deck menu and **Import bundle** on the dashboard.
+
+## 🌐 Public share links
+
+Prefer a link over a file? **Share link** in any deck menu creates a public, read-only preview
+(`/?share=<token>`): anyone with the URL can flip through the cards (hints included) and — after
+signing in — import a copy with one click. Links are **idempotent** (sharing twice returns the
+same URL), can be **rotated** (`POST /decks/{id}/share?regenerate=true`) and **revoked**
+(`DELETE /decks/{id}/share`) at any time. Owner identity, review history and SRS scheduling
+state are never exposed on the preview.
+
+## 🎯 Daily goal
+
+Set a motivational daily review goal (default 20, configurable 1–500 via `PUT /auth/goal` or the
+**Edit** button on the stats page). The stats dashboard renders it as an animated progress ring —
+emerald + 🎉 once you've hit today's target. Both study and quiz reviews count.
+
+## 💡 Hints
+
+Cards accept an optional **hint** (≤300 chars) — a nudge shown on the question side before
+flipping (study mode: *Need a hint?* button; quiz mode: same). Hints ride along through CSV
+round-trips, bundles, duplication and share links.
 
 ## 📁 Project structure
 
@@ -219,15 +246,15 @@ Deckio/
 
 ## 🧪 Quality
 
-- **62-check cumulative API smoke suite** (auth, CRUD, CSV edge cases, tags, search, bundles, session flow, stats math, rate limiting) — all passing
+- **100-check cumulative API smoke suite** (auth, CRUD, CSV edge cases, tags & hints, search, bundles, share links, session flow, stats math, daily goal, rate limiting) — all passing
 - ESLint clean (Next.js 16 + react-hooks rules)
 - Ownership enforced on every resource; foreign ids return `404` (no existence leaks)
 - Typed end-to-end: Pydantic schemas ↔ TypeScript interfaces in `src/lib/types.ts`
 
 ## 🔭 Roadmap ideas
 
-- Image occlusion cards · public share links (read-only web view)
-- Refresh tokens / OAuth · Alembic migrations · card hints
+- Image occlusion cards · review-reminder notifications · spaced-repetition presets (Anki-style knobs)
+- Refresh tokens / OAuth · Alembic migrations · collaborative decks
 
 ---
 

@@ -63,6 +63,13 @@ Response `204 No Content`. The user row is deleted — decks, cards, sessions an
 reviews all cascade at the DB level. Issued tokens become unusable immediately.
 Errors: `403` password incorrect.
 
+### `PUT /auth/goal` — set the daily review goal
+
+Request: `{ "daily_goal": 30 }` (integer 1–500; default 20).
+Response `200`: the updated `user` object. The value powers the goal ring on the stats
+dashboard; `GET /stats/overview` returns `today_reviews` vs `daily_goal`.
+Errors: `422` out of range. Auth required.
+
 ---
 
 ## Decks
@@ -98,12 +105,28 @@ Response `201 Created` → `Deck` (as above, zero stats).
 ### `POST /decks/{id}/duplicate` — duplicate a deck → `201`
 
 Copies the deck (title becomes `"<title> (copy)"`, color/icon/description carried over)
-**with all of its cards, including their tags**. Copied cards start as brand-new (SRS state
-zeroed, `due_at = NULL` → due immediately), so the copy is fully studiable right away;
-review history does not carry over.
+**with all of its cards, including their tags and hints**. Copied cards start as brand-new
+(SRS state zeroed, `due_at = NULL` → due immediately), so the copy is fully studiable right
+away; review history does not carry over. The copy is never shared even if the original was.
 
 Response `201`: the new `Deck` object (same shape as the list endpoint, `card_count` and
 `due_count` already populated).
+
+### `GET /decks/{id}/share` — share-link state → `200`
+
+Response: `{ "share_token": "xBL...", "share_path": "/?share=xBL..." }` — both `null` when the
+deck is private.
+
+### `POST /decks/{id}/share` — create the public link → `200`
+
+Idempotent: if a token already exists it is returned unchanged (already-shared URLs never
+break accidentally). Query `?regenerate=true` issues a NEW token and instantly invalidates
+the old link. The token serves a read-only preview via `GET /public/decks/{token}` (below);
+the web client builds `/?share=<token>` SPA URLs from it.
+
+### `DELETE /decks/{id}/share` — revoke the public link → `204`
+
+The deck becomes private again; old links return `404` immediately.
 
 ---
 
@@ -116,7 +139,7 @@ Optional query filters:
 - `?tag=vocabulary` — exact, case-insensitive tag match
 
 ```json
-{ "id": 5, "deck_id": 1, "front": "hola", "back": "hello", "tags": ["greetings", "a1"], "created_at": "...",
+{ "id": 5, "deck_id": 1, "front": "hola", "back": "hello", "tags": ["greetings", "a1"], "hint": "sounds like “oh-la”", "created_at": "...",
   "ease": 2.5, "interval_days": 0, "reps": 0, "lapses": 0, "due_at": null }
 ```
 
@@ -125,23 +148,24 @@ card (due immediately); otherwise the client renders `due` / `in Nd` chips from 
 
 ### `POST /decks/{deck_id}/cards` — add a card
 
-Request: `{ "front": "hola", "back": "hello", "tags": ["greetings"] }`
-(front ≤ 1000 chars, back ≤ 2000, up to 8 tags of ≤ 32 chars — trimmed and deduped
-case-insensitively by the server) → `201`
+Request: `{ "front": "hola", "back": "hello", "tags": ["greetings"], "hint": "sounds like “oh-la”" }`
+(front ≤ 1000 chars, back ≤ 2000, up to 8 tags of ≤ 32 chars, optional hint ≤ 300 chars —
+trimmed and deduped case-insensitively by the server) → `201`
 
 ### `GET /decks/{deck_id}/cards/export` — export deck as CSV
 
 Response `200` with `Content-Type: text/csv` and `Content-Disposition: attachment`:
 
 ```csv
-front,back,tags
-hola,hello,greetings|a1
-gato,cat,
+front,back,tags,hint
+hola,hello,greetings|a1,sounds like "oh-la"
+gato,cat,,
 ```
 
 Header row included. The third `tags` column appears only when at least one card has
-tags (`|` separates tags inside the cell). Output remains a valid round-trip input for
-the bulk import endpoint.
+tags (`|` separates tags inside the cell); the fourth `hint` column appears only when at
+least one card has a hint. Output remains a valid round-trip input for the bulk import
+endpoint.
 
 ### `POST /decks/{deck_id}/cards/bulk` — CSV import
 
@@ -156,7 +180,7 @@ Response `200`:
 { "imported": 3, "skipped": 1, "errors": ["Row 4: front and back must not be empty."] }
 ```
 
-Rules: delimiter auto-detected (`,` `;` tab) · optional header row · optional third column for tags (`|`-separated) · duplicates skipped
+Rules: delimiter auto-detected (`,` `;` tab) · optional header row · optional third column for tags (`|`-separated) · optional fourth column for the hint · duplicates skipped
 silently · limits: 1 MB, 1000 rows · `422` if the file yields zero importable rows.
 
 ### `PUT /cards/{id}` — update (partial) · `DELETE /cards/{id}` — delete (`204`)
@@ -173,8 +197,8 @@ silently · limits: 1 MB, 1000 rows · `422` if the file yields zero importable 
   "title": "Spanish Basics", "description": "...", "color": "#f59e0b", "icon": "\xf0\x9f\x93\x9a",
   "card_count": 2,
   "cards": [
-    { "front": "hola", "back": "hello", "tags": ["greetings"] },
-    { "front": "gato", "back": "cat", "tags": [] }
+    { "front": "hola", "back": "hello", "tags": ["greetings"], "hint": "sounds like “oh-la”" },
+    { "front": "gato", "back": "cat", "tags": [], "hint": null }
   ]
 }
 ```
@@ -190,6 +214,33 @@ Response: the new `DeckOut` (with the real `due_count`). Errors: `422` validatio
 (empty cards array, bad color/icon, …).
 
 ---
+
+## Public share previews (no authentication)
+
+### `GET /public/decks/{token}` — read-only deck preview → `200`
+
+Serves anyone holding a deck's share token — no `Authorization` header, no CORS-
+authenticated session. Returns deck metadata and cards only; owner identity, review
+history and SRS scheduling state are never exposed.
+
+```json
+{
+  "title": "Spanish Basics", "description": "...", "color": "#f59e0b", "icon": "📚",
+  "card_count": 2,
+  "cards": [
+    { "front": "hola", "back": "hello", "tags": ["greetings"], "hint": "sounds like “oh-la”" },
+    { "front": "gato", "back": "cat", "tags": [], "hint": null }
+  ]
+}
+```
+
+Errors: `404` — unknown token, or the link was revoked/rotated (message:
+*"This deck is private or the link has been revoked"*; the two cases are
+indistinguishable by design).
+
+The token lifecycle is owned by `GET/POST/DELETE /decks/{id}/share` (see Decks section).
+The bundled web client renders the preview at `/?share=<token>` — including a
+**Import this deck** button for signed-in visitors.
 
 ## Search
 
@@ -316,6 +367,7 @@ for the weekly bar chart.
   "total_decks": 3, "total_cards": 87, "total_sessions": 14,
   "total_reviews": 412, "correct_reviews": 344, "accuracy": 83.5,
   "streak_days": 4, "mastered_cards": 21, "due_cards": 9,
+  "today_reviews": 12, "daily_goal": 20,
   "activity": [ { "date": "2025-01-01", "reviews": 18, "correct": 15 },
                 { "date": "2025-01-02", "reviews": 0,  "correct": 0 } ]
 }
@@ -323,6 +375,7 @@ for the weekly bar chart.
 - `streak_days` — consecutive days with reviews ending today (yesterday still counts as grace)
 - `mastered_cards` — cards with ≥ 3 reviews and ≥ 80% accuracy
 - `due_cards` — cards due right now across all decks (new or overdue per SM-2)
+- `today_reviews` / `daily_goal` — reviews logged today (UTC) vs the user's configured goal (powers the goal ring)
 - `activity` — last `days` days (UTC), ascending, missing days zero-filled
 
 ### `GET /stats/sessions?limit=15` — recent sessions across all decks → `200`
