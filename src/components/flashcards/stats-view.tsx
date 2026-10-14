@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   BookOpen,
   Brain,
+  Download,
   Flame,
   History,
   Layers,
@@ -235,6 +236,7 @@ export function StatsView() {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [goalOpen, setGoalOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const goalToastFired = useRef(false);
 
   const load = useCallback(async () => {
@@ -258,7 +260,6 @@ export function StatsView() {
 
   useEffect(() => {
     // Initial load on mount — setState happens asynchronously after awaits.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
 
@@ -288,6 +289,19 @@ export function StatsView() {
     );
   }
 
+  /** Download the full review history as CSV (all decks). */
+  async function exportReviews() {
+    setExporting(true);
+    try {
+      await api.exportReviewsCsv();
+      toast.success("Review history exported");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Export failed");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   if (!overview || weak === null || decks === null || sessions === null) {
     return (
       <div className="mx-auto w-full max-w-5xl space-y-4 px-4 py-8">
@@ -314,9 +328,22 @@ export function StatsView() {
       <Button variant="ghost" onClick={() => go("decks")} className="mb-3 gap-1.5">
         <ArrowLeft className="h-4 w-4" /> All decks
       </Button>
-      <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
-        <LineChart className="h-6 w-6 text-amber-500" /> Learning stats
-      </h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+          <LineChart className="h-6 w-6 text-amber-500" /> Learning stats
+        </h1>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void exportReviews()}
+          disabled={exporting}
+          className="shrink-0 gap-1.5"
+          aria-label="Export review history as CSV"
+        >
+          {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          <span className="hidden sm:inline">Export CSV</span>
+        </Button>
+      </div>
 
       {/* ---------- Daily goal ring ---------- */}
       <section className="mt-6 rounded-2xl border bg-card p-6" aria-label="Daily review goal">

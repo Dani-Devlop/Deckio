@@ -32,6 +32,9 @@ export interface Deck {
   // Smart-review presets (per-deck):
   new_per_day: number;
   max_reviews: number;
+  // Quiz defaults (per-deck):
+  quiz_questions: number; // 5–50 — preselected quiz length
+  quiz_answer_side: "front" | "back"; // which side is shown as the question
   share_token: string | null; // public read-only link token (null = private)
 }
 
@@ -42,6 +45,8 @@ export interface DeckInput {
   icon?: string;
   new_per_day?: number; // new cards a smart review may introduce per day
   max_reviews?: number; // hard cap on smart-review session size
+  quiz_questions?: number; // default quiz length (5–50)
+  quiz_answer_side?: "front" | "back"; // which side quizzes show as the question
 }
 
 // ----------------------------- Cards -----------------------------
@@ -174,6 +179,9 @@ export interface ReviewOut {
 }
 
 // ----------------------------- Quiz -----------------------------
+/** `direction` query param for quiz start: "deck" defers to the deck's preset. */
+export type QuizDirection = "front" | "back" | "deck";
+
 export interface QuizQuestion {
   card_id: number;
   front: string;
@@ -187,6 +195,7 @@ export interface QuizStart {
   deck_id: number;
   mode: string;
   total_questions: number;
+  direction: "front" | "back"; // which card side the question shows
   questions: QuizQuestion[];
 }
 

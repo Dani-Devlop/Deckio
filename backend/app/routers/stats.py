@@ -5,9 +5,11 @@ enforce ownership). Aggregations happen in SQL; only small post-processing
 (streak / activity fill / accuracy math) happens in Python.
 """
 
+import csv
+import io
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +34,53 @@ MASTERED_MIN_ACCURACY = 0.8
 def _as_utc(dt: datetime) -> datetime:
     """Normalize possibly-naive (SQLite) datetimes to timezone-aware UTC."""
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+# Column contract shared by the account-wide and per-deck CSV exports
+# (decks.py imports `_reviews_csv` from here — no circular import, since
+# stats.py never imports from decks.py).
+REVIEW_CSV_HEADER = [
+    "reviewed_at",
+    "deck_id",
+    "deck_title",
+    "card_id",
+    "front",
+    "back",
+    "result",
+    "selected_answer",
+    "mode",
+    "session_id",
+]
+
+
+def _reviews_csv(rows) -> str:
+    """Serialize review-history rows as downloadable CSV text.
+
+    `rows` are (CardReview, Card, Deck, StudySession) tuples as produced by
+    the export queries below. `reviewed_at` is emitted as ISO-8601 UTC (naive
+    SQLite datetimes are normalized first). The writer uses QUOTE_MINIMAL, so
+    commas/quotes/newlines inside card text are escaped automatically; a
+    UTF-8 BOM is prepended so Excel opens the file with the right encoding.
+    """
+    buf = io.StringIO()
+    writer = csv.writer(buf)  # QUOTE_MINIMAL (default) is fine for this data
+    writer.writerow(REVIEW_CSV_HEADER)
+    for review, card, deck, session in rows:
+        writer.writerow(
+            [
+                _as_utc(review.reviewed_at).isoformat(),
+                deck.id,
+                deck.title,
+                card.id,
+                card.front,
+                card.back,
+                review.result,
+                review.selected_answer or "",
+                session.mode,
+                session.id,
+            ]
+        )
+    return "\ufeff" + buf.getvalue()
 
 
 def _streak_days(review_dates: set[date]) -> int:
@@ -285,6 +334,37 @@ async def deck_stats(
         weak_cards_count=int(weak_cards or 0),
         last_studied_at=recent[0].started_at if recent else None,
         recent_sessions=recent_out,
+    )
+
+
+@router.get(
+    "/export/reviews.csv",
+    summary="Export the user's full review history as CSV",
+)
+async def export_reviews_csv(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Full review history across all decks as a CSV download.
+
+    Reviews are joined through study sessions (user-scoped) to cards and
+    decks; rows are ordered oldest → newest. The dataset is small enough that
+    streaming/chunking is unnecessary — one query, in-memory CSV.
+    """
+    rows = (
+        await db.execute(
+            select(CardReview, Card, Deck, StudySession)
+            .join(StudySession, StudySession.id == CardReview.session_id)
+            .join(Card, Card.id == CardReview.card_id)
+            .join(Deck, Deck.id == Card.deck_id)
+            .where(StudySession.user_id == user.id)
+            .order_by(CardReview.reviewed_at)
+        )
+    ).all()
+    return Response(
+        content=_reviews_csv(rows),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="deckio-reviews-all.csv"'},
     )
 
 

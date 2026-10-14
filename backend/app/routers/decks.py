@@ -26,6 +26,7 @@ from ..schemas import (
     ShareLinkOut,
     tags_to_storage,
 )
+from .stats import _reviews_csv  # shared CSV builder (stats imports nothing from decks)
 
 router = APIRouter(prefix="/decks", tags=["Decks"])
 
@@ -51,6 +52,8 @@ def _to_deck_out(deck: Deck, stats: dict) -> DeckOut:
         due_count=stats.get("due", 0),
         new_per_day=deck.new_per_day,
         max_reviews=deck.max_reviews,
+        quiz_questions=deck.quiz_questions,
+        quiz_answer_side=deck.quiz_answer_side,
         share_token=deck.share_token,
     )
 
@@ -143,6 +146,8 @@ async def duplicate_deck(
         icon=deck.icon,
         new_per_day=deck.new_per_day,  # smart-review presets carry over
         max_reviews=deck.max_reviews,
+        quiz_questions=deck.quiz_questions,  # quiz defaults carry over
+        quiz_answer_side=deck.quiz_answer_side,
     )
     db.add(copy)
     await db.flush()  # assign copy.id before inserting child cards
@@ -304,9 +309,13 @@ async def revoke_share_link(
 # ------------------------- Deck bundle (share) -------------------------
 
 
+def _slug(title: str) -> str:
+    """Filename-safe slug for download names (bundle JSON, review CSVs)."""
+    return re.sub(r"[^a-zA-Z0-9-_]+", "-", title).strip("-").lower() or "deck"
+
+
 def _bundle_filename(title: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9-_]+", "-", title).strip("-").lower() or "deck"
-    return f"{slug}-deckio.json"
+    return f"{_slug(title)}-deckio.json"
 
 
 @router.get(
@@ -330,6 +339,8 @@ async def export_deck_bundle(
         icon=deck.icon,
         new_per_day=deck.new_per_day,
         max_reviews=deck.max_reviews,
+        quiz_questions=deck.quiz_questions,
+        quiz_answer_side=deck.quiz_answer_side,
         card_count=len(cards),
         cards=[
             BundleCardIn(
@@ -370,6 +381,9 @@ async def import_deck_bundle(
         # Older bundles don't carry SRS presets → model defaults (20/100).
         new_per_day=20 if payload.new_per_day is None else payload.new_per_day,
         max_reviews=100 if payload.max_reviews is None else payload.max_reviews,
+        # Same for quiz defaults (10 questions, front direction).
+        quiz_questions=10 if payload.quiz_questions is None else payload.quiz_questions,
+        quiz_answer_side="front" if payload.quiz_answer_side is None else payload.quiz_answer_side,
     )
     db.add(deck)
     await db.flush()
@@ -397,3 +411,38 @@ async def import_deck_bundle(
         .where(Card.deck_id == deck.id, or_(Card.due_at.is_(None), Card.due_at <= utcnow()))
     )
     return _to_deck_out(deck, {"card_count": len(payload.cards), "due": int(due or 0)})
+
+
+# ------------------------- Review-history CSV export -------------------------
+
+
+@router.get(
+    "/{deck_id}/export/reviews.csv",
+    summary="Export this deck's review history as CSV",
+)
+async def export_deck_reviews_csv(
+    deck: Deck = Depends(get_owned_deck),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Per-deck slice of the account-wide review export (same columns).
+
+    Reviews are matched via the study sessions held on this deck, mirroring
+    how per-deck stats group reviews. Filename embeds a slug of the title.
+    """
+    rows = (
+        await db.execute(
+            select(CardReview, Card, Deck, StudySession)
+            .join(StudySession, StudySession.id == CardReview.session_id)
+            .join(Card, Card.id == CardReview.card_id)
+            .join(Deck, Deck.id == Card.deck_id)
+            .where(StudySession.deck_id == deck.id)
+            .order_by(CardReview.reviewed_at)
+        )
+    ).all()
+    return Response(
+        content=_reviews_csv(rows),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="deckio-reviews-{_slug(deck.title)}.csv"'
+        },
+    )

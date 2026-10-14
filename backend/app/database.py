@@ -75,6 +75,10 @@ async def run_startup_migrations() -> None:
             )
         if "plan_json" not in session_cols:
             sync_conn.exec_driver_sql("ALTER TABLE study_sessions ADD COLUMN plan_json TEXT")
+        if "quiz_direction" not in session_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE study_sessions ADD COLUMN quiz_direction VARCHAR(5)"
+            )
 
         user_cols = {c["name"] for c in insp.get_columns("users")}
         if "daily_goal" not in user_cols:
@@ -95,6 +99,14 @@ async def run_startup_migrations() -> None:
         if "max_reviews" not in deck_cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE decks ADD COLUMN max_reviews INTEGER NOT NULL DEFAULT 100"
+            )
+        if "quiz_questions" not in deck_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE decks ADD COLUMN quiz_questions INTEGER NOT NULL DEFAULT 10"
+            )
+        if "quiz_answer_side" not in deck_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE decks ADD COLUMN quiz_answer_side VARCHAR(5) NOT NULL DEFAULT 'front'"
             )
 
     async with engine.begin() as conn:

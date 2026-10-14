@@ -85,6 +85,18 @@ class DeckBase(BaseModel):
         default=100, ge=5, le=500,
         description="Hard cap on the size of one smart-review session",
     )
+    # Per-deck quiz defaults (the quiz setup screen pre-fills from these):
+    quiz_questions: int = Field(
+        default=10, ge=5, le=50,
+        description="Default question count offered when starting a quiz on this deck",
+    )
+    quiz_answer_side: Literal["front", "back"] = Field(
+        default="front",
+        description=(
+            "Which side is the quiz question: 'front' → question shows card.front "
+            "and answers are backs; 'back' → question shows card.back, answers are fronts"
+        ),
+    )
 
 
 class DeckCreate(DeckBase):
@@ -100,6 +112,8 @@ class DeckUpdate(BaseModel):
     icon: str | None = Field(default=None, max_length=8)
     new_per_day: int | None = Field(default=None, ge=0, le=100)
     max_reviews: int | None = Field(default=None, ge=5, le=500)
+    quiz_questions: int | None = Field(default=None, ge=5, le=50)
+    quiz_answer_side: Literal["front", "back"] | None = Field(default=None)
 
 
 class DeckOut(BaseModel):
@@ -120,6 +134,9 @@ class DeckOut(BaseModel):
     # Smart-review presets (per-deck):
     new_per_day: int = 20
     max_reviews: int = 100
+    # Per-deck quiz defaults:
+    quiz_questions: int = 10
+    quiz_answer_side: str = "front"
     # Public share link token (null = private). The client builds
     # `/?share=<token>` preview URLs from it.
     share_token: str | None = None
@@ -345,6 +362,10 @@ class QuizStartOut(BaseModel):
     deck_id: int
     mode: str = "quiz"
     total_questions: int
+    # Resolved answer direction used to build the questions ("front" = the
+    # question shows card.front and answers are backs; "back" is the mirror)
+    # so the client knows which side to reveal as the answer.
+    direction: str = "front"
     questions: list[QuizQuestion]
 
 
@@ -518,6 +539,9 @@ class DeckBundleIn(BaseModel):
     # Optional SRS presets (older bundles don't carry them → model defaults).
     new_per_day: int | None = Field(default=None, ge=0, le=100)
     max_reviews: int | None = Field(default=None, ge=5, le=500)
+    # Optional quiz defaults (older bundles don't carry them → model defaults).
+    quiz_questions: int | None = Field(default=None, ge=5, le=50)
+    quiz_answer_side: Literal["front", "back"] | None = Field(default=None)
     cards: list[BundleCardIn] = Field(min_length=1, max_length=MAX_ROWS_PER_IMPORT)
 
 
@@ -532,6 +556,8 @@ class DeckBundleOut(BaseModel):
     icon: str
     new_per_day: int = 20
     max_reviews: int = 100
+    quiz_questions: int = 10
+    quiz_answer_side: str = "front"
     card_count: int
     cards: list[BundleCardIn]
 

@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowLeft,
+  ArrowRight,
   BookOpen,
   Brain,
   Clock,
@@ -71,6 +73,8 @@ export function DeckFormDialog({
   const [icon, setIcon] = useState(DECK_ICONS[0]);
   const [newPerDay, setNewPerDay] = useState("20");
   const [maxReviews, setMaxReviews] = useState("100");
+  const [quizQuestions, setQuizQuestions] = useState("10");
+  const [quizAnswerSide, setQuizAnswerSide] = useState<"front" | "back">("front");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,6 +87,8 @@ export function DeckFormDialog({
       setIcon(deck?.icon ?? DECK_ICONS[0]);
       setNewPerDay(String(deck?.new_per_day ?? 20));
       setMaxReviews(String(deck?.max_reviews ?? 100));
+      setQuizQuestions(String(deck?.quiz_questions ?? 10));
+      setQuizAnswerSide(deck?.quiz_answer_side === "back" ? "back" : "front");
       setError(null);
     }
   }, [deck, open]);
@@ -102,6 +108,11 @@ export function DeckFormDialog({
       setError("The session cap must be a whole number between 5 and 500.");
       return;
     }
+    const qq = Number(quizQuestions);
+    if (!Number.isInteger(qq) || qq < 5 || qq > 50) {
+      setError("Default quiz questions must be a whole number between 5 and 50.");
+      return;
+    }
     setBusy(true);
     try {
       const payload = {
@@ -111,6 +122,8 @@ export function DeckFormDialog({
         icon,
         new_per_day: npd,
         max_reviews: mx,
+        quiz_questions: qq,
+        quiz_answer_side: quizAnswerSide,
       };
       if (deck) {
         await api.decks.update(deck.id, payload);
@@ -244,6 +257,74 @@ export function DeckFormDialog({
                 />
                 <p id="deck-max-reviews-hint" className="text-[11px] leading-tight text-muted-foreground">
                   5–500 cards per session
+                </p>
+              </div>
+            </div>
+          </fieldset>
+
+          {/* ---- Quiz defaults ---- */}
+          <fieldset className="rounded-xl border bg-muted/30 p-3.5">
+            <legend className="flex items-center gap-1.5 px-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Brain className="h-3.5 w-3.5 text-amber-500" /> Quiz
+            </legend>
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label htmlFor="deck-quiz-questions" className="text-xs font-normal">
+                  Default questions
+                </Label>
+                <Input
+                  id="deck-quiz-questions"
+                  type="number"
+                  inputMode="numeric"
+                  min={5}
+                  max={50}
+                  step={1}
+                  value={quizQuestions}
+                  onChange={(e) => setQuizQuestions(e.target.value)}
+                  aria-describedby="deck-quiz-questions-hint"
+                />
+                <p id="deck-quiz-questions-hint" className="text-[11px] leading-tight text-muted-foreground">
+                  5–50 · shown preselected when starting a quiz
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs font-normal">Answer direction</Label>
+                <div
+                  className="grid grid-cols-2 gap-2"
+                  role="radiogroup"
+                  aria-label="Quiz answer direction"
+                >
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={quizAnswerSide === "front"}
+                    onClick={() => setQuizAnswerSide("front")}
+                    className={`flex h-10 items-center justify-center gap-1.5 rounded-lg border text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+                      quizAnswerSide === "front"
+                        ? "border-amber-400 bg-amber-50 text-amber-800 shadow-sm dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300"
+                        : "bg-card text-muted-foreground hover:border-amber-300 hover:text-foreground"
+                    }`}
+                  >
+                    <ArrowRight className="h-3.5 w-3.5" /> Front → Back
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={quizAnswerSide === "back"}
+                    onClick={() => setQuizAnswerSide("back")}
+                    className={`flex h-10 items-center justify-center gap-1.5 rounded-lg border text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+                      quizAnswerSide === "back"
+                        ? "border-amber-400 bg-amber-50 text-amber-800 shadow-sm dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300"
+                        : "bg-card text-muted-foreground hover:border-amber-300 hover:text-foreground"
+                    }`}
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" /> Back → Front
+                  </button>
+                </div>
+                <p className="text-[11px] leading-tight text-muted-foreground">
+                  {quizAnswerSide === "back"
+                    ? "Quizzes show the back of each card; you pick the matching front"
+                    : "Quizzes show the front of each card; you pick the matching back"}
                 </p>
               </div>
             </div>

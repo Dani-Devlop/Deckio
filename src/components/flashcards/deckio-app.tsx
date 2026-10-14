@@ -16,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { hashToView } from "@/lib/hash-nav";
 import { useAppStore } from "@/lib/store";
 
 import { AccountSettingsDialog } from "./account-settings-dialog";
@@ -193,6 +194,23 @@ export function DeckioApp() {
     }
   }, [boot]);
 
+  // Hash routing: browser back/forward + deep links (#/stats, #/deck/3 …).
+  // `go`/`goStudy` already sync the hash, so when the change originates here the
+  // parsed state equals the store state and this is a no-op (loop guard).
+  useEffect(() => {
+    const onHashChange = () => {
+      const parsed = hashToView(window.location.hash);
+      if (!parsed) return;
+      const s = useAppStore.getState();
+      if (!s.user) return; // deep links only apply to signed-in views
+      if (s.view !== parsed.view || s.activeDeckId !== parsed.deckId || s.studySrs !== parsed.srs) {
+        s.applyHashState(parsed);
+      }
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
   /** Leave the share preview for good (clears state, URL and pending marker). */
   const closeShare = () => {
     setShareToken(null);
@@ -208,9 +226,12 @@ export function DeckioApp() {
     window.history.replaceState(null, "", window.location.pathname);
   };
 
-  // Restore a parked share preview once the user is signed in again.
+  // Restore a parked share preview once the user is signed in again — unless
+  // the URL carries an explicit in-app deep link (#/stats, #/deck/3 …), which
+  // always wins over a stale parked token from an earlier visit.
   useEffect(() => {
     if (!user || shareToken) return;
+    if (hashToView(window.location.hash)) return;
     const pending = window.sessionStorage.getItem(SHARE_PENDING_KEY);
     if (pending) {
       // eslint-disable-next-line react-hooks/set-state-in-effect

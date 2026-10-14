@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import { ArrowLeft, Brain, Check, Lightbulb, Loader2, RotateCcw, Settings2, Trophy, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, Brain, Check, Lightbulb, Loader2, RotateCcw, Settings2, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,47 @@ import type { QuizResult, QuizStart } from "@/lib/types";
 import { CardImage } from "./card-image";
 
 const QUIZ_LENGTHS = [5, 10, 15] as const;
+const OPTION_LETTERS = ["A", "B", "C", "D", "E", "F"] as const;
+
+/** Animated SVG accuracy ring around the result trophy (emerald ≥80, amber ≥50, rose below). */
+function ScoreRing({ pct }: { pct: number }) {
+  const SIZE = 104;
+  const STROKE = 8;
+  const R = (SIZE - STROKE) / 2;
+  const CIRC = 2 * Math.PI * R;
+  const color = pct >= 80 ? "#10b981" : pct >= 50 ? "#f59e0b" : "#f43f5e";
+
+  return (
+    <div className="relative" style={{ width: SIZE, height: SIZE }}>
+      <svg width={SIZE} height={SIZE} className="-rotate-90" aria-hidden>
+        <circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={R}
+          fill="none"
+          strokeWidth={STROKE}
+          className="stroke-muted"
+        />
+        <motion.circle
+          cx={SIZE / 2}
+          cy={SIZE / 2}
+          r={R}
+          fill="none"
+          strokeWidth={STROKE}
+          strokeLinecap="round"
+          stroke={color}
+          strokeDasharray={CIRC}
+          initial={{ strokeDashoffset: CIRC }}
+          animate={{ strokeDashoffset: CIRC * (1 - Math.min(100, Math.max(0, pct)) / 100) }}
+          transition={{ duration: 0.9, ease: "easeOut" }}
+        />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <Trophy className="h-9 w-9" style={{ color }} />
+      </div>
+    </div>
+  );
+}
 
 /** Quiz mode: server-generated multiple choice with instant feedback. */
 export function QuizView({ deckId }: { deckId: number }) {
@@ -33,11 +74,34 @@ export function QuizView({ deckId }: { deckId: number }) {
   const [hintShown, setHintShown] = useState(false); // per-question, reset on advance
   const advancing = useRef(false);
 
+  // Deck quiz defaults (length preselect + answer direction) — graceful fallback to 10/front.
+  const [deckDefault, setDeckDefault] = useState<number | null>(null);
+  const [direction, setDirection] = useState<"front" | "back">("front");
+
+  useEffect(() => {
+    let cancelled = false;
+    api.decks
+      .get(deckId)
+      .then((d) => {
+        if (cancelled) return;
+        const preset = typeof d.quiz_questions === "number" ? d.quiz_questions : null;
+        setDeckDefault(preset);
+        setDirection(d.quiz_answer_side === "back" ? "back" : "front");
+        if (preset) setLimit(preset); // preselect the deck's default length
+      })
+      .catch(() => {
+        /* setup stays on the 10/front fallback */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deckId]);
+
   const fetchQuiz = useCallback(
-    async (count: number | null) => {
+    async (count: number | null, dir: "front" | "back") => {
       // Fetches questions; all setState calls run after the await resolves.
       try {
-        const q = await api.quiz.start(deckId, count ?? undefined);
+        const q = await api.quiz.start(deckId, count ?? undefined, dir);
         setQuiz(q);
         setPhase("playing");
       } catch (e) {
@@ -58,8 +122,8 @@ export function QuizView({ deckId }: { deckId: number }) {
     setCorrectCount(0);
     advancing.current = false;
     setPhase("loading");
-    void fetchQuiz(limit);
-  }, [fetchQuiz, limit]);
+    void fetchQuiz(limit, direction);
+  }, [fetchQuiz, limit, direction]);
 
   /** Back to the length picker. */
   const backToSetup = useCallback(() => {
@@ -112,8 +176,14 @@ export function QuizView({ deckId }: { deckId: number }) {
     }
   }
 
-  // ---- Setup screen: pick how many questions ----
+  // ---- Setup screen: pick how many questions + answer direction ----
   if (phase === "setup") {
+    // The deck's own default gets a dedicated chip when it isn't 5/10/15.
+    const deckDefaultChip: number[] =
+      deckDefault !== null && !(QUIZ_LENGTHS as readonly number[]).includes(deckDefault)
+        ? [deckDefault]
+        : [];
+
     return (
       <div className="mx-auto w-full max-w-xl px-4 py-10">
         <Button variant="ghost" onClick={() => go("deck", deckId)} className="mb-4 gap-1.5">
@@ -129,8 +199,11 @@ export function QuizView({ deckId }: { deckId: number }) {
             Multiple choice · 4 options per question · instant feedback
           </p>
 
+          <p className="mt-6 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Questions
+          </p>
           <div
-            className="mt-6 flex items-center justify-center gap-2"
+            className="mt-2 flex flex-wrap items-center justify-center gap-2"
             role="radiogroup"
             aria-label="Number of questions"
           >
@@ -150,6 +223,28 @@ export function QuizView({ deckId }: { deckId: number }) {
                 {n}
               </button>
             ))}
+            {deckDefaultChip.map((n) => (
+              <button
+                key={`deck-${n}`}
+                type="button"
+                role="radio"
+                aria-checked={limit === n}
+                onClick={() => setLimit(n)}
+                title={`${n} — this deck's default quiz length`}
+                className={`h-11 rounded-xl border px-3 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+                  limit === n
+                    ? "border-amber-400 bg-amber-50 text-amber-800 shadow-sm dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300"
+                    : "bg-card text-muted-foreground hover:border-amber-300 hover:text-foreground"
+                }`}
+              >
+                <span className="flex flex-col items-center leading-tight">
+                  <span>{n}</span>
+                  <span className="text-[9px] font-normal uppercase tracking-wide opacity-75">
+                    deck default
+                  </span>
+                </span>
+              </button>
+            ))}
             <button
               type="button"
               role="radio"
@@ -165,10 +260,51 @@ export function QuizView({ deckId }: { deckId: number }) {
             </button>
           </div>
 
+          <p className="mt-5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Direction
+          </p>
+          <div
+            className="mt-2 flex items-center justify-center gap-2"
+            role="radiogroup"
+            aria-label="Answer direction"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={direction === "front"}
+              onClick={() => setDirection("front")}
+              className={`flex h-11 items-center gap-1.5 rounded-xl border px-4 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+                direction === "front"
+                  ? "border-amber-400 bg-amber-50 text-amber-800 shadow-sm dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300"
+                  : "bg-card text-muted-foreground hover:border-amber-300 hover:text-foreground"
+              }`}
+            >
+              <ArrowRight className="h-4 w-4" /> Front → Back
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={direction === "back"}
+              onClick={() => setDirection("back")}
+              className={`flex h-11 items-center gap-1.5 rounded-xl border px-4 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+                direction === "back"
+                  ? "border-amber-400 bg-amber-50 text-amber-800 shadow-sm dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300"
+                  : "bg-card text-muted-foreground hover:border-amber-300 hover:text-foreground"
+              }`}
+            >
+              <ArrowLeft className="h-4 w-4" /> Back → Front
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">
+            {direction === "back"
+              ? "You'll see the back of each card and pick the matching front"
+              : "You'll see the front of each card and pick the matching back"}
+          </p>
+
           <Button
             onClick={() => {
               setPhase("loading");
-              void fetchQuiz(limit);
+              void fetchQuiz(limit, direction);
             }}
             className="mt-6 h-11 w-full gap-2 bg-amber-500 text-base text-white hover:bg-amber-600"
           >
@@ -217,17 +353,7 @@ export function QuizView({ deckId }: { deckId: number }) {
     return (
       <div className="mx-auto w-full max-w-2xl px-4 py-10">
         <div className="flex flex-col items-center text-center">
-          <span
-            className={`flex h-20 w-20 items-center justify-center rounded-full ${
-              scorePct >= 80
-                ? "bg-emerald-100 text-emerald-600"
-                : scorePct >= 50
-                  ? "bg-amber-100 text-amber-600"
-                  : "bg-rose-100 text-rose-600"
-            }`}
-          >
-            <Trophy className="h-10 w-10" />
-          </span>
+          <ScoreRing pct={scorePct} />
           <h1 className="mt-5 text-2xl font-bold">
             {result.correct}/{result.answered} correct
           </h1>
@@ -346,20 +472,23 @@ export function QuizView({ deckId }: { deckId: number }) {
         </div>
       )}
 
-      {/* ---------- Options ---------- */}
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {(q?.options ?? []).map((option) => {
+      {/* ---------- Options (stagger in per question) ---------- */}
+      <div key={index} className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {(q?.options ?? []).map((option, i) => {
           const isChosen = selected === option;
           const isCorrect = correctAnswer === option;
           const showCorrect = selected !== null && isCorrect;
           const showWrong = isChosen && correctAnswer !== null && !isCorrect;
 
           return (
-            <button
+            <motion.button
               key={option}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2, delay: i * 0.03, ease: "easeOut" }}
               onClick={() => void choose(option)}
               disabled={selected !== null}
-              className={`flex min-h-14 items-center justify-between gap-2 rounded-xl border p-4 text-left text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+              className={`flex min-h-14 items-center gap-3 rounded-xl border p-4 text-left text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
                 showCorrect
                   ? "border-emerald-400 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/10 dark:text-emerald-300"
                   : showWrong
@@ -369,10 +498,16 @@ export function QuizView({ deckId }: { deckId: number }) {
                       : "border-border bg-card hover:border-amber-300 hover:bg-amber-50/50 dark:hover:bg-amber-500/5"
               }`}
             >
-              <span>{option}</span>
+              <span
+                aria-hidden
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-muted text-xs font-semibold text-muted-foreground"
+              >
+                {OPTION_LETTERS[i] ?? i + 1}
+              </span>
+              <span className="min-w-0 flex-1">{option}</span>
               {showCorrect && <Check className="h-5 w-5 shrink-0 text-emerald-600" />}
               {showWrong && <X className="h-5 w-5 shrink-0 text-rose-500" />}
-            </button>
+            </motion.button>
           );
         })}
       </div>

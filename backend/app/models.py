@@ -69,6 +69,15 @@ class Deck(Base):
     # max_reviews: hard cap on the total size of one smart-review session.
     new_per_day: Mapped[int] = mapped_column(Integer, default=20)
     max_reviews: Mapped[int] = mapped_column(Integer, default=100)
+    # --- Quiz defaults, offered by the per-deck quiz setup screen ---
+    # quiz_questions: default question count pre-selected when starting a quiz
+    #   on this deck (bounds 5–50 are enforced at the schema layer).
+    # quiz_answer_side: which card side is the QUESTION — "front" means the
+    #   question shows card.front and the options are backs; "back" is the
+    #   mirror (question = card.back, options are fronts). `quiz/start`
+    #   resolves the effective direction and stores it on the session.
+    quiz_questions: Mapped[int] = mapped_column(Integer, default=10)
+    quiz_answer_side: Mapped[str] = mapped_column(String(5), default="front")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     owner: Mapped["User"] = relationship(back_populates="decks")
@@ -132,6 +141,12 @@ class StudySession(Base):
     # daily-limit budget deterministic across reloads; NULL = legacy session
     # (plan re-derived from due state on each `next`).
     plan_json: Mapped[str | None] = mapped_column(Text, default=None)
+    # For quiz sessions: the resolved answer direction ("front" | "back") as
+    # chosen at quiz start — "front" = the question shows card.front and the
+    # answer is card.back, "back" is the mirror. Persisted so /quiz/answer and
+    # /quiz/result grade the right side even after a server restart;
+    # NULL = legacy session (treated as "front").
+    quiz_direction: Mapped[str | None] = mapped_column(String(5), default=None)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 

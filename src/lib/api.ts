@@ -15,6 +15,7 @@ import type {
   DeckStats,
   PublicDeck,
   QuizAnswerOut,
+  QuizDirection,
   QuizResult,
   QuizStart,
   ReviewOut,
@@ -218,8 +219,13 @@ export const api = {
 
   // ---- Quiz ----
   quiz: {
-    start: (deckId: number, limit?: number) =>
-      request<QuizStart>("POST", `/api/decks/${deckId}/quiz/start${limit ? `?limit=${limit}` : ""}`),
+    start: (deckId: number, limit?: number, direction?: QuizDirection) => {
+      const sp = new URLSearchParams();
+      if (limit) sp.set("limit", String(limit));
+      if (direction) sp.set("direction", direction);
+      const qs = sp.toString();
+      return request<QuizStart>("POST", `/api/decks/${deckId}/quiz/start${qs ? `?${qs}` : ""}`);
+    },
     answer: (sessionId: number, cardId: number, answer: string) =>
       request<QuizAnswerOut>("POST", "/api/quiz/answer", {
         session_id: sessionId,
@@ -241,4 +247,55 @@ export const api = {
 
   // ---- Search (⌘K palette) ----
   search: (q: string) => request<SearchResults>("GET", `/api/search?q=${encodeURIComponent(q)}`),
+
+  // ---- CSV export (review history) ----
+  /** Download the review history as a CSV attachment — every deck, or one deck.
+   * Streams the response into a blob download (filename from Content-Disposition). */
+  exportReviewsCsv: async (deckId?: number): Promise<void> => {
+    const path =
+      deckId != null ? `/api/decks/${deckId}/export/reviews.csv` : "/api/stats/export/reviews.csv";
+    const headers: Record<string, string> = {};
+    const token = getAuthToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    let res: Response;
+    try {
+      res = await fetch(buildUrl(path), { method: "GET", headers });
+    } catch {
+      throw new ApiError(0, "Cannot reach the API server — is the backend running?");
+    }
+
+    if (!res.ok) {
+      if (res.status === 401 && token) {
+        setAuthToken(null);
+        if (typeof window !== "undefined") window.location.reload();
+      }
+      // Surface the server's detail message when it sent JSON.
+      let message = `Request failed (${res.status})`;
+      try {
+        const data = (await res.json()) as { detail?: unknown } | null;
+        if (typeof data?.detail === "string") message = data.detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new ApiError(res.status, message);
+    }
+
+    const blob = await res.blob();
+    // Prefer the server's filename (Content-Disposition) with a sane fallback.
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const match = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(disposition);
+    const filename =
+      (match ? decodeURIComponent(match[1] ?? match[2] ?? "").replace(/[/\\]/g, "") : "") ||
+      "deckio-reviews.csv";
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };

@@ -36,13 +36,21 @@ router = APIRouter(tags=["Quiz"])
     "/decks/{deck_id}/quiz/start",
     response_model=QuizStartOut,
     status_code=status.HTTP_201_CREATED,
-    summary="Start a quiz session (4 options per card)",
+    summary="Start a quiz session (4 options per card, configurable answer direction)",
 )
 async def start_quiz(
     deck: Deck = Depends(get_owned_deck),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     limit: int = Query(default=10, ge=1, le=50, description="Max questions per quiz"),
+    direction: str = Query(
+        default="deck",
+        pattern="^(deck|front|back)$",
+        description=(
+            "Which side is the question: 'deck' = use the deck's saved "
+            "quiz_answer_side, otherwise force 'front' or 'back'"
+        ),
+    ),
 ) -> QuizStartOut:
     cards = (await db.scalars(select(Card).where(Card.deck_id == deck.id))).all()
     if not cards:
@@ -51,13 +59,22 @@ async def start_quiz(
             detail="This deck has no cards yet — add some cards first",
         )
 
+    # Resolve the answer direction: 'deck' defers to the deck's saved default;
+    # an explicit 'front'/'back' overrides it for this session only.
+    effective = deck.quiz_answer_side if direction == "deck" else direction
+
     # Cap long decks; shuffle so each quiz feels different.
     if len(cards) > limit:
         cards = random.sample(cards, limit)
     random.shuffle(cards)
 
     # Build the distractor pool: same deck first, then the user's other decks.
-    pool = [c.back.strip() for c in cards if c.back.strip()]
+    # The pool is drawn from the ANSWER side, which flips with the direction:
+    # "front" mode answers with backs, "back" mode answers with fronts.
+    if effective == "front":
+        pool = [c.back.strip() for c in cards if c.back.strip()]
+    else:
+        pool = [c.front.strip() for c in cards if c.front.strip()]
     if len(cards) < 4:
         extra = (
             await db.scalars(
@@ -66,28 +83,42 @@ async def start_quiz(
                 .where(Deck.user_id == user.id, Card.deck_id != deck.id)
             )
         ).all()
-        pool += [c.back.strip() for c in extra if c.back.strip()]
+        if effective == "front":
+            pool += [c.back.strip() for c in extra if c.back.strip()]
+        else:
+            pool += [c.front.strip() for c in extra if c.front.strip()]
     # De-duplicate while preserving order (identical answers would be ambiguous).
     pool = list(dict.fromkeys(pool))
     random.shuffle(pool)
 
     questions: list[QuizQuestion] = []
     for card in cards:
-        correct = card.back.strip()
+        # In "front" mode the question shows card.front and the answer is
+        # card.back; "back" mode is the exact mirror.
+        question_text = card.front if effective == "front" else card.back
+        correct = card.back.strip() if effective == "front" else card.front.strip()
         distractors = [b for b in pool if b != correct][:3]
         options = distractors + [correct]
         random.shuffle(options)  # never reveal the correct answer by position
         questions.append(
             QuizQuestion(
                 card_id=card.id,
-                front=card.front,
+                front=question_text,
                 options=options,
                 hint=card.hint,
                 image_url=card.image_url,
             )
         )
 
-    session = StudySession(user_id=user.id, deck_id=deck.id, mode="quiz", total_planned=len(questions))
+    # Remember the resolved direction on the session so /quiz/answer and
+    # /quiz/result keep grading the right side (even across restarts).
+    session = StudySession(
+        user_id=user.id,
+        deck_id=deck.id,
+        mode="quiz",
+        total_planned=len(questions),
+        quiz_direction=effective,
+    )
     db.add(session)
     await db.commit()
     await db.refresh(session)
@@ -96,6 +127,7 @@ async def start_quiz(
         session_id=session.id,
         deck_id=deck.id,
         total_questions=len(questions),
+        direction=effective,
         questions=questions,
     )
 
@@ -121,7 +153,11 @@ async def answer_quiz_question(
         )
 
     # Exact match after trimming — the options were generated from real backs.
-    correct = card.back.strip() == payload.answer.strip()
+    # Correctness respects the direction stored at quiz start: in "back" mode
+    # the question showed card.back, so the expected answer is card.front
+    # (legacy sessions have quiz_direction NULL → treated as "front").
+    expected = card.front if session.quiz_direction == "back" else card.back
+    correct = expected.strip() == payload.answer.strip()
     result = "correct" if correct else "wrong"
 
     # Upsert review (last answer within a session wins).
@@ -165,7 +201,9 @@ async def answer_quiz_question(
 
     return QuizAnswerOut(
         correct=correct,
-        correct_answer=card.back,
+        # The reveal always shows the ANSWER text (card.front in "back" mode,
+        # card.back in "front" mode) so the client flips to the right side.
+        correct_answer=expected,
         selected_answer=payload.answer,
         answered=answered,
         total=total,
@@ -198,11 +236,15 @@ async def quiz_result(
         )
     ).all()
 
+    # Per-question breakdown adapts to the session's direction: the client
+    # treats `front` as "the question shown", so in "back" mode it carries
+    # card.back and the answer column flips to card.front.
+    back_mode = session.quiz_direction == "back"
     details = [
         QuizResultItem(
             card_id=card.id,
-            front=card.front,
-            correct_answer=card.back,
+            front=card.back if back_mode else card.front,
+            correct_answer=card.front if back_mode else card.back,
             selected_answer=review.selected_answer,
             result=review.result,
         )

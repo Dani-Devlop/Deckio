@@ -11,6 +11,7 @@ import {
   FileDown,
   FileUp,
   Globe,
+  History,
   ImagePlus,
   Lightbulb,
   Loader2,
@@ -514,6 +515,17 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
     }
   }
 
+  /** Download this deck's review history as a CSV attachment. */
+  async function exportReviews() {
+    if (!deck) return;
+    try {
+      await api.exportReviewsCsv(deck.id);
+      toast.success("Review history exported");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Export failed");
+    }
+  }
+
   /** Duplicate the deck (SRS progress reset) and open the fresh copy. */
   async function duplicateDeck() {
     if (!deck) return;
@@ -658,6 +670,9 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => void exportCsv()}>
                     <Download className="h-4 w-4" /> Export CSV
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void exportReviews()}>
+                    <History className="h-4 w-4" /> Export reviews
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => void exportBundle()} disabled={empty}>
                     <FileDown className="h-4 w-4" /> Export bundle (JSON)
