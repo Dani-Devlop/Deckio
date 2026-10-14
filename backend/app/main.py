@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .database import Base, engine
+from .routers import auth
 
 
 @asynccontextmanager
@@ -48,6 +49,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ---- Routers (mounted at root AND under /api for gateway compatibility) ----
+app.include_router(auth.router)
+app.include_router(auth.router, prefix="/api")
 
 
 @app.get("/health", tags=["Meta"])
