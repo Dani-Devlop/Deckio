@@ -26,8 +26,9 @@ exposed through a clean REST API and bundled with a polished web client.
 
 - 🔐 **JWT authentication** — register / login, bcrypt-hashed passwords, bearer-token sessions
 - 🗂 **Deck management** — CRUD with color accents, emoji icons, search, sorting, live stats
-- 🃏 **Flashcards** — CRUD per deck, plus **CSV bulk import** (delimiter auto-detection, per-row error reports)
+- 🃏 **Flashcards** — CRUD per deck, plus **CSV bulk import & export** (delimiter auto-detection, per-row error reports, round-trip files)
 - 📖 **Study mode** — server-tracked sessions, random card order, self-grading, progress resume
+- ✨ **Spaced repetition (SM-2)** — *Smart review* sessions cover only due cards; correct answers grow the interval (1d → 3d → interval × ease), lapses reschedule in 10 minutes
 - 🧠 **Quiz mode** — auto-generated questions with **4 options** (1 correct + 3 distractors), instant feedback, full result breakdown
 - 📊 **Analytics** — accuracy, review streaks, 7-day activity, mastered cards, per-deck stats, **weak-card detection**
 - 🖥 **Web app included** — responsive, dark-mode ready client that speaks to the API out of the box
@@ -131,9 +132,10 @@ Full reference with examples: **[docs/API.md](docs/API.md)** · Interactive: **`
 | `GET/PUT/DELETE` | `/decks/{id}` | Read / update / delete deck |
 | `GET` | `/decks/{id}/cards` | List cards |
 | `POST` | `/decks/{id}/cards` | Add card |
+| `GET` | `/decks/{id}/cards/export` | **Export deck as CSV** (`front,back`) |
 | `POST` | `/decks/{id}/cards/bulk` | **CSV bulk import** (multipart `file` or raw `text/csv`) |
 | `PUT/DELETE` | `/cards/{id}` | Update / delete card |
-| `POST` | `/decks/{id}/study/start` | Open a study session |
+| `POST` | `/decks/{id}/study/start` | Open a study session (`?srs=true` → only due cards) |
 | `GET` | `/decks/{id}/study/next` | Next un-reviewed card (random order) |
 | `POST` | `/study/review` | Record `correct` / `wrong` |
 | `POST` | `/decks/{id}/quiz/start` | Generate questions (1 correct + 3 distractors, `?limit=`) |

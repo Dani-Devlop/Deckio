@@ -88,6 +88,18 @@ Response `201 Created` → `Deck` (as above, zero stats).
 
 Request: `{ "front": "hola", "back": "hello" }` (front ≤ 1000 chars, back ≤ 2000) → `201`
 
+### `GET /decks/{deck_id}/cards/export` — export deck as CSV
+
+Response `200` with `Content-Type: text/csv` and `Content-Disposition: attachment`:
+
+```csv
+front,back
+hola,hello
+gato,cat
+```
+
+Header row included; output is a valid round-trip input for the bulk import endpoint.
+
 ### `POST /decks/{deck_id}/cards/bulk` — CSV import
 
 Two accepted formats:
@@ -110,11 +122,17 @@ silently · limits: 1 MB, 1000 rows · `422` if the file yields zero importable 
 
 ## Study mode
 
-### `POST /decks/{deck_id}/study/start` → `201`
+### `POST /decks/{deck_id}/study/start?srs=true` → `201`
 
 ```json
-{ "session_id": 10, "deck_id": 1, "mode": "study", "total_cards": 11 }
+{ "session_id": 10, "deck_id": 1, "mode": "study", "srs": true, "total_cards": 8 }
 ```
+
+- **Regular session** (`srs=false`, default): covers the whole deck in random order.
+- **Smart review** (`srs=true`): covers only cards that are *due* — new cards
+  (never reviewed) or overdue per the SM-2 schedule — oldest due first.
+  `total_cards` is the fixed due count at start.
+  `400 "Nothing due right now — you're all caught up! 🎉"` when the deck has no due cards.
 Errors: `400 This deck has no cards yet`.
 
 ### `GET /decks/{deck_id}/study/next?session_id=10` → `200`
@@ -138,6 +156,13 @@ Response `200`:
 ```
 Re-reviewing a card in the same session **updates** the previous result (one review row per
 card per session). Errors: `400` card not in the session's deck / not a study session.
+
+**Scheduling:** study-mode reviews update the card's SM-2 state — correct answers grow the
+interval (`1d → 3d → interval × ease`, ease +0.1), wrong answers reset the card and re-due it
+in 10 minutes (ease −0.2, floor 1.3). Quiz answers are practice-only and do not reschedule.
+
+Scheduling state per card (returned in card payloads only when scheduled):
+`ease` (1.3–3.0), `interval_days`, `reps`, `lapses`, `due_at`.
 
 ---
 
@@ -196,13 +221,14 @@ keeps the selected answer for the result screen.
 {
   "total_decks": 3, "total_cards": 87, "total_sessions": 14,
   "total_reviews": 412, "correct_reviews": 344, "accuracy": 83.5,
-  "streak_days": 4, "mastered_cards": 21,
+  "streak_days": 4, "mastered_cards": 21, "due_cards": 9,
   "activity": [ { "date": "2025-01-01", "reviews": 18, "correct": 15 },
                 { "date": "2025-01-02", "reviews": 0,  "correct": 0 } ]
 }
 ```
 - `streak_days` — consecutive days with reviews ending today (yesterday still counts as grace)
 - `mastered_cards` — cards with ≥ 3 reviews and ≥ 80% accuracy
+- `due_cards` — cards due right now across all decks (new or overdue per SM-2)
 - `activity` — last 7 days (UTC), missing days zero-filled
 
 ### `GET /stats/decks/{deck_id}` → `200`
