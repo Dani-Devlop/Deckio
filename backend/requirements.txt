@@ -1,0 +1,12 @@
+# Deckio Flashcards API — Python dependencies
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29            # async PostgreSQL driver (production)
+aiosqlite>=0.20          # async SQLite driver (local dev fallback)
+pydantic>=2.7
+pydantic-settings>=2.3
+email-validator>=2.1     # EmailStr validation
+PyJWT>=2.8               # JWT encoding/decoding
+bcrypt>=4.1              # password hashing
+python-multipart>=0.0.9  # multipart/form-data (CSV file upload)
