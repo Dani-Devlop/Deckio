@@ -5,8 +5,6 @@ deck in **three aggregate queries** (not N+1 per-deck queries) so the
 dashboard stays fast as the library grows.
 """
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
