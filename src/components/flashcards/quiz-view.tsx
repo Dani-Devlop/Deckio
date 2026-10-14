@@ -13,6 +13,8 @@ import { formatDuration } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
 import type { QuizResult, QuizStart } from "@/lib/types";
 
+import { CardImage } from "./card-image";
+
 const QUIZ_LENGTHS = [5, 10, 15] as const;
 
 /** Quiz mode: server-generated multiple choice with instant feedback. */
@@ -308,10 +310,15 @@ export function QuizView({ deckId }: { deckId: number }) {
       </div>
 
       {/* ---------- Question ---------- */}
-      <div className="mt-6 rounded-2xl border bg-card p-8 text-center shadow-sm">
+      <div className="mt-6 rounded-2xl border bg-card p-6 text-center shadow-sm sm:p-8">
         <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
           Which answer is correct?
         </span>
+        {q?.image_url && (
+          <div className="mt-3 flex justify-center">
+            <CardImage src={q.image_url} alt={`Image for: ${q.front}`} />
+          </div>
+        )}
         <p className="mt-3 text-xl font-medium leading-relaxed sm:text-2xl">{q?.front}</p>
         {q?.hint && hintShown && (
           <motion.p

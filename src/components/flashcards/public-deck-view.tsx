@@ -22,6 +22,7 @@ import { useAppStore } from "@/lib/store";
 import type { Deck, PublicCard, PublicDeck } from "@/lib/types";
 
 import { BrandLogo } from "./deckio-app";
+import { CardImage } from "./card-image";
 
 /** One flip-to-reveal preview card (local state only, nothing is recorded). */
 function PreviewCard({ card, index, accent }: { card: PublicCard; index: number; accent: string }) {
@@ -49,6 +50,11 @@ function PreviewCard({ card, index, accent }: { card: PublicCard; index: number;
           <p className="mt-1 text-[10px] font-semibold uppercase tracking-widest text-amber-600">
             Answer
           </p>
+          {card.image_url && (
+            <div className="mt-2 flex justify-center">
+              <CardImage src={card.image_url} alt={`Image for: ${card.back}`} className="!max-h-20" />
+            </div>
+          )}
           <p className="mt-2 text-sm font-medium leading-relaxed">{card.back}</p>
           <p className="mt-3 flex items-center gap-1 text-[10px] text-muted-foreground">
             <RotateCw className="h-2.5 w-2.5" /> click to flip back
@@ -59,6 +65,11 @@ function PreviewCard({ card, index, accent }: { card: PublicCard; index: number;
           <p className="mt-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             Question
           </p>
+          {card.image_url && (
+            <div className="mt-2 flex justify-center">
+              <CardImage src={card.image_url} alt={`Image for: ${card.front}`} className="!max-h-20" />
+            </div>
+          )}
           <p className="mt-2 text-sm font-medium leading-relaxed">{card.front}</p>
           {card.hint && (
             <p className="mt-1.5 flex items-start gap-1 text-xs italic text-muted-foreground">

@@ -27,9 +27,9 @@ exposed through a clean REST API and bundled with a polished web client.
 - 🔐 **JWT authentication** — register / login, bcrypt-hashed passwords, bearer-token sessions, brute-force rate limiting on credential endpoints
 - 👤 **Account management** — password change (re-verifies current) and self-service account deletion with cascade cleanup
 - 🗂 **Deck management** — CRUD with color accents, emoji icons, search, sorting, live stats, **one-click duplication** (cards copied, SRS progress reset)
-- 🃏 **Flashcards** — CRUD per deck, free-form **tags** (max 8/card), optional **hints** (memory aids shown before flipping), plus **CSV bulk import & export** (delimiter auto-detection, per-row error reports, round-trip files incl. tags & hints)
+- 🃏 **Flashcards** — CRUD per deck, free-form **tags** (max 8/card), optional **hints** (memory aids shown before flipping), optional **images** (rendered on both faces in study mode), plus **CSV bulk import & export** (delimiter auto-detection, header-aware column mapping, per-row error reports, round-trip files incl. tags, hints & images)
 - 🔎 **Global search (⌘K)** — command palette searching decks, card text and tags, with quick actions
-- 🔗 **Deck bundles** — export any deck as a portable JSON bundle (cards + tags + hints) and import it on any account — deck sharing made easy
+- 🔗 **Deck bundles** — export any deck as a portable JSON bundle (cards + tags + hints + images) and import it on any account — deck sharing made easy
 - 🌐 **Public share links** — one-click read-only deck preview (`/?share=<token>`) that works without an account; rotate or revoke anytime, with a built-in **Import this deck** CTA
 - 📖 **Study mode** — server-tracked sessions, random card order, self-grading, progress resume
 - ✨ **Spaced repetition (SM-2)** — *Smart review* sessions cover only due cards; correct answers grow the interval (1d → 3d → interval × ease), lapses reschedule in 10 minutes
@@ -144,7 +144,7 @@ Full reference with examples: **[docs/API.md](docs/API.md)** · Interactive: **`
 | `GET` | `/public/decks/{token}` | **Read-only deck preview by share token** — no authentication |
 | `GET` | `/decks/{id}/cards` | List cards (`?q=` text search, `?tag=` exact tag filter) |
 | `POST` | `/decks/{id}/cards` | Add card (with optional `tags` array) |
-| `GET` | `/decks/{id}/cards/export` | **Export deck as CSV** (`front,back[,tags][,hint]`) |
+| `GET` | `/decks/{id}/cards/export` | **Export deck as CSV** (`front,back[,tags][,hint][,image_url]`) |
 | `POST` | `/decks/{id}/cards/bulk` | **CSV bulk import** (multipart `file` or raw `text/csv`) |
 | `PUT/DELETE` | `/cards/{id}` | Update / delete card |
 | `POST` | `/decks/{id}/study/start` | Open a study session (`?srs=true` → only due cards) |
@@ -171,12 +171,17 @@ What does ORM stand for?,Object-Relational Mapping
 front<tab>back                                ← and tabs; header row optional
 hola,hello,greetings|a1                       ← optional 3rd column = tags (| separated)
 hola,hello,greetings,think “oh-la”            ← optional 4th column = hint
+hola,hello,greetings,oh-la,https://…jpg       ← optional 5th column = image URL
 ```
 
 - Delimiter **auto-detected** (comma / semicolon / tab), quotes supported
-- Optional header row is recognized (`front,back`, `question,answer`, …)
+- Optional header row is recognized (`front,back`, `question,answer`, …). **With a header,
+  columns are mapped by name in any order** — `front`/`question`/`term`/`word`,
+  `back`/`answer`/`definition`/`translation`, plus `tags`, `hint` and `image`/`image_url`/`picture`.
+  Without a header, parsing stays positional (3rd = tags, 4th = hint, 5th = image)
 - Optional **tags column** — `|`-separated inside the cell; CSV export includes it back when any card has tags
 - Optional **hint column** — memory aid shown before flipping; export includes it when any card has one
+- Optional **image column** — picture URL (`http(s)://`, `data:image/…`, or site-relative) rendered above the card text; export includes it when any card has one
 - Invalid rows are reported **with row numbers**; exact duplicates are skipped
 - Limits: 1 MB per upload, 1000 cards per import
 
@@ -214,6 +219,15 @@ emerald + 🎉 once you've hit today's target. Both study and quiz reviews count
 Cards accept an optional **hint** (≤300 chars) — a nudge shown on the question side before
 flipping (study mode: *Need a hint?* button; quiz mode: same). Hints ride along through CSV
 round-trips, bundles, duplication and share links.
+
+## 🖼 Images
+
+Cards accept an optional **image URL** (≤500 chars; `http(s)://`, inline `data:image/…`, or
+site-relative). Pictures render above the text on **both faces of the study card** (which grows
+taller to fit), in **quiz questions**, on **card rows** as a thumbnail with a click-to-zoom
+lightbox, and in **public share previews**. Images ride along through CSV round-trips, bundles,
+duplication and share links — and the card editor shows a live preview with graceful fallback
+for broken URLs.
 
 ## 📁 Project structure
 

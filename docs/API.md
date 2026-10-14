@@ -139,7 +139,7 @@ Optional query filters:
 - `?tag=vocabulary` — exact, case-insensitive tag match
 
 ```json
-{ "id": 5, "deck_id": 1, "front": "hola", "back": "hello", "tags": ["greetings", "a1"], "hint": "sounds like “oh-la”", "created_at": "...",
+{ "id": 5, "deck_id": 1, "front": "hola", "back": "hello", "tags": ["greetings", "a1"], "hint": "sounds like “oh-la”", "image_url": "https://…jpg", "created_at": "...",
   "ease": 2.5, "interval_days": 0, "reps": 0, "lapses": 0, "due_at": null }
 ```
 
@@ -148,23 +148,25 @@ card (due immediately); otherwise the client renders `due` / `in Nd` chips from 
 
 ### `POST /decks/{deck_id}/cards` — add a card
 
-Request: `{ "front": "hola", "back": "hello", "tags": ["greetings"], "hint": "sounds like “oh-la”" }`
+Request: `{ "front": "hola", "back": "hello", "tags": ["greetings"], "hint": "sounds like “oh-la”", "image_url": "https://…jpg" }`
 (front ≤ 1000 chars, back ≤ 2000, up to 8 tags of ≤ 32 chars, optional hint ≤ 300 chars —
-trimmed and deduped case-insensitively by the server) → `201`
+trimmed and deduped case-insensitively by the server, optional `image_url` ≤ 500 chars —
+must start with `http://`, `https://`, `data:image/` or `/`) → `201`
 
 ### `GET /decks/{deck_id}/cards/export` — export deck as CSV
 
 Response `200` with `Content-Type: text/csv` and `Content-Disposition: attachment`:
 
 ```csv
-front,back,tags,hint
-hola,hello,greetings|a1,sounds like "oh-la"
-gato,cat,,
+front,back,tags,hint,image_url
+hola,hello,greetings|a1,sounds like "oh-la",https://…jpg
+gato,cat,,,
 ```
 
 Header row included. The third `tags` column appears only when at least one card has
 tags (`|` separates tags inside the cell); the fourth `hint` column appears only when at
-least one card has a hint. Output remains a valid round-trip input for the bulk import
+least one card has a hint; the fifth `image_url` column appears only when at least one
+card has an image. Output remains a valid round-trip input for the bulk import
 endpoint.
 
 ### `POST /decks/{deck_id}/cards/bulk` — CSV import
@@ -180,7 +182,10 @@ Response `200`:
 { "imported": 3, "skipped": 1, "errors": ["Row 4: front and back must not be empty."] }
 ```
 
-Rules: delimiter auto-detected (`,` `;` tab) · optional header row · optional third column for tags (`|`-separated) · optional fourth column for the hint · duplicates skipped
+Rules: delimiter auto-detected (`,` `;` tab) · optional header row — **when present, columns
+are mapped by name in any order** (`front`/`question`/`term`/`word`, `back`/`answer`/`definition`/`translation`,
+plus optional `tags`, `hint` and `image`/`image_url`/`picture` columns) · without a header,
+positional parsing: 3rd column = tags (`|`-separated), 4th = hint, 5th = image URL · duplicates skipped
 silently · limits: 1 MB, 1000 rows · `422` if the file yields zero importable rows.
 
 ### `PUT /cards/{id}` — update (partial) · `DELETE /cards/{id}` — delete (`204`)

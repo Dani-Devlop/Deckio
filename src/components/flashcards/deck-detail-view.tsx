@@ -11,6 +11,7 @@ import {
   FileDown,
   FileUp,
   Globe,
+  ImagePlus,
   Lightbulb,
   Loader2,
   MoreVertical,
@@ -32,6 +33,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -49,6 +51,8 @@ import { useAppStore } from "@/lib/store";
 import type { BulkImportResult, Card, Deck, DeckBundle } from "@/lib/types";
 
 import { DeckFormDialog } from "./dashboard-view";
+import { isValidImageUrl, CardImage } from "./card-image";
+import { ImageLightbox } from "./image-lightbox";
 import { ShareDialog } from "./share-dialog";
 import { TagEditor } from "./tag-editor";
 
@@ -70,6 +74,8 @@ function CardFormDialog({
   const [back, setBack] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [hint, setHint] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [imgBroken, setImgBroken] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,13 +85,22 @@ function CardFormDialog({
       setBack(card?.back ?? "");
       setTags(card?.tags ?? []);
       setHint(card?.hint ?? "");
+      setImageUrl(card?.image_url ?? "");
+      setImgBroken(false);
       setError(null);
     }
   }, [card, open]);
 
+  const trimmedUrl = imageUrl.trim();
+  const urlValid = trimmedUrl === "" || isValidImageUrl(trimmedUrl);
+
   async function save() {
     if (!front.trim() || !back.trim()) {
       setError("Both the front and the back are required.");
+      return;
+    }
+    if (!urlValid) {
+      setError("The image URL must start with http://, https://, data:image/ or /.");
       return;
     }
     setBusy(true);
@@ -96,6 +111,7 @@ function CardFormDialog({
           back: back.trim(),
           tags,
           hint: hint.trim() || null, // null clears the hint
+          image_url: trimmedUrl || null, // null clears the image
         });
         toast.success("Card updated");
       } else {
@@ -104,6 +120,7 @@ function CardFormDialog({
           back: back.trim(),
           tags,
           hint: hint.trim() || null,
+          image_url: trimmedUrl || null,
         });
         toast.success("Card added");
       }
@@ -168,6 +185,67 @@ function CardFormDialog({
               onChange={(e) => setHint(e.target.value)}
             />
             <p className="text-right text-xs text-muted-foreground">{hint.length}/300</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="card-image" className="flex items-center gap-1">
+              <ImagePlus className="h-3.5 w-3.5 text-sky-600" /> Image (optional)
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                id="card-image"
+                type="text"
+                inputMode="url"
+                maxLength={500}
+                placeholder="https://example.com/picture.jpg"
+                value={imageUrl}
+                onChange={(e) => {
+                  setImageUrl(e.target.value);
+                  setImgBroken(false);
+                }}
+                aria-invalid={trimmedUrl !== "" && !urlValid}
+                className={trimmedUrl !== "" && !urlValid ? "border-rose-400 focus-visible:ring-rose-300" : ""}
+              />
+              {trimmedUrl !== "" && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 shrink-0 text-muted-foreground"
+                  aria-label="Remove image"
+                  onClick={() => {
+                    setImageUrl("");
+                    setImgBroken(false);
+                  }}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+            {trimmedUrl !== "" && (
+              <div
+                className={`flex items-center justify-center overflow-hidden rounded-xl border bg-muted/40 p-2 ${
+                  urlValid ? "" : "opacity-50"
+                }`}
+              >
+                {urlValid && !imgBroken ? (
+                  <img
+                    src={trimmedUrl}
+                    alt="Card image preview"
+                    referrerPolicy="no-referrer"
+                    onError={() => setImgBroken(true)}
+                    className="max-h-24 w-auto max-w-full rounded-lg object-contain"
+                  />
+                ) : (
+                  <p className="flex items-center gap-1.5 py-2 text-xs text-muted-foreground">
+                    <ImagePlus className="h-3.5 w-3.5" />
+                    {urlValid
+                      ? "Preview unavailable — the URL may be broken, but you can still save."
+                      : "URL must start with http://, https://, data:image/ or /"}
+                  </p>
+                )}
+              </div>
+            )}
+            <p className="text-right text-xs text-muted-foreground">{imageUrl.length}/500</p>
           </div>
           {error && <p className="text-sm text-rose-600">{error}</p>}
         </div>
@@ -252,7 +330,10 @@ function ImportCsvDialog({
           <DialogTitle>Import cards from CSV</DialogTitle>
           <DialogDescription>
             Two columns: <code className="rounded bg-muted px-1">front,back</code>. Delimiters
-            (comma, semicolon, tab) are auto-detected; a header row is optional.
+            (comma, semicolon, tab) are auto-detected; a header row is optional. With a header,
+            columns are mapped by name — extras like{" "}
+            <code className="rounded bg-muted px-1">tags,hint,image_url</code> are picked up in any
+            order; without one, 3rd/4th/5th columns are tags / hint / image.
           </DialogDescription>
         </DialogHeader>
 
@@ -266,7 +347,7 @@ function ImportCsvDialog({
             <Textarea
               rows={8}
               className="font-mono text-xs"
-              placeholder={"front,back\nhola,hello\ngracias,thank you"}
+              placeholder={"front,back,hint,image_url\nhola,hello,sounds like oh-la,https://…/hola.jpg\ngracias,thank you"}
               value={csvText}
               onChange={(e) => setCsvText(e.target.value)}
               aria-label="CSV content"
@@ -347,6 +428,7 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
   const [busyDelete, setBusyDelete] = useState(false);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [lightbox, setLightbox] = useState<{ src: string; front: string; back: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -741,35 +823,60 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                   }}
                   aria-label={`Edit card: ${card.front}`}
                 >
-                  <p className="truncate font-medium">{card.front}</p>
-                  <p className="mt-0.5 truncate text-sm text-muted-foreground">{card.back}</p>
-                  {card.hint && (
-                    <p
-                      className="mt-1 flex max-w-lg items-start gap-1 truncate text-xs italic text-muted-foreground"
-                      title={`Hint: ${card.hint}`}
-                    >
-                      <Lightbulb className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
-                      <span className="truncate">{card.hint}</span>
-                    </p>
-                  )}
-                  {card.tags.length > 0 && (
-                    <span className="mt-1.5 flex flex-wrap gap-1">
-                      {card.tags.slice(0, 3).map((t) => (
-                        <span
-                          key={t}
-                          className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                  <div className="flex items-start gap-2.5">
+                    {card.image_url && (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`View image for: ${card.front}`}
+                        className="shrink-0 rounded-lg ring-offset-2 transition hover:ring-2 hover:ring-amber-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLightbox({ src: card.image_url!, front: card.front, back: card.back });
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setLightbox({ src: card.image_url!, front: card.front, back: card.back });
+                          }
+                        }}
+                      >
+                        <CardImage src={card.image_url} alt={`Image for: ${card.front}`} variant="thumb" />
+                      </span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">{card.front}</p>
+                      <p className="mt-0.5 truncate text-sm text-muted-foreground">{card.back}</p>
+                      {card.hint && (
+                        <p
+                          className="mt-1 flex max-w-lg items-start gap-1 truncate text-xs italic text-muted-foreground"
+                          title={`Hint: ${card.hint}`}
                         >
-                          <Tag className="h-2.5 w-2.5" />
-                          {t}
-                        </span>
-                      ))}
-                      {card.tags.length > 3 && (
-                        <span className="text-[10px] text-muted-foreground">
-                          +{card.tags.length - 3}
+                          <Lightbulb className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
+                          <span className="truncate">{card.hint}</span>
+                        </p>
+                      )}
+                      {card.tags.length > 0 && (
+                        <span className="mt-1.5 flex flex-wrap gap-1">
+                          {card.tags.slice(0, 3).map((t) => (
+                            <span
+                              key={t}
+                              className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                            >
+                              <Tag className="h-2.5 w-2.5" />
+                              {t}
+                            </span>
+                          ))}
+                          {card.tags.length > 3 && (
+                            <span className="text-[10px] text-muted-foreground">
+                              +{card.tags.length - 3}
+                            </span>
+                          )}
                         </span>
                       )}
-                    </span>
-                  )}
+                    </div>
+                  </div>
                 </button>
                 <div className="flex shrink-0 items-center gap-2 pt-0.5">
                   {/* SRS state chip: new / due / scheduled */}
@@ -809,6 +916,14 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
       )}
 
       {/* ---------- Dialogs ---------- */}
+      <ImageLightbox
+        src={lightbox?.src ?? null}
+        title={lightbox?.front ?? ""}
+        subtitle={lightbox?.back}
+        onOpenChange={(open) => {
+          if (!open) setLightbox(null);
+        }}
+      />
       <CardFormDialog
         open={cardFormOpen}
         onOpenChange={setCardFormOpen}

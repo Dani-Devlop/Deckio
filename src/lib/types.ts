@@ -47,6 +47,7 @@ export interface Card {
   back: string;
   tags: string[];
   hint: string | null; // optional memory aid shown before flipping
+  image_url: string | null; // optional picture rendered above the text
   created_at: string;
   // Spaced-repetition state (read-only, for UI chips):
   ease: number;
@@ -61,6 +62,7 @@ export interface CardInput {
   back?: string;
   tags?: string[];
   hint?: string | null; // null clears the hint
+  image_url?: string | null; // null clears the image
 }
 
 export interface BulkImportResult {
@@ -108,7 +110,7 @@ export interface DeckBundle {
   color: string;
   icon: string;
   card_count: number;
-  cards: { front: string; back: string; tags: string[]; hint?: string | null }[];
+  cards: { front: string; back: string; tags: string[]; hint?: string | null; image_url?: string | null }[];
 }
 
 // ------------------------- Public share links -------------------------
@@ -122,6 +124,7 @@ export interface PublicCard {
   back: string;
   tags: string[];
   hint: string | null;
+  image_url: string | null;
 }
 
 /** Read-only deck preview fetched via a share token (no auth). */
@@ -165,6 +168,7 @@ export interface QuizQuestion {
   front: string;
   options: string[];
   hint: string | null;
+  image_url: string | null;
 }
 
 export interface QuizStart {

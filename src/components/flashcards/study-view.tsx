@@ -13,6 +13,8 @@ import { useAppStore } from "@/lib/store";
 import type { StudyNext, StudyStart } from "@/lib/types";
 import type { ReviewResult } from "@/lib/types";
 
+import { CardImage } from "./card-image";
+
 /** Self-paced study mode: flip card → self-grade (Again / Got it). */
 export function StudyView({ deckId }: { deckId: number }) {
   const go = useAppStore((s) => s.go);
@@ -211,9 +213,9 @@ export function StudyView({ deckId }: { deckId: number }) {
       {/* ---------- Flashcard ---------- */}
       <div className="mt-6" style={{ perspective: "1400px" }}>
         <button
-          className={`relative block h-72 w-full text-left transition-transform duration-500 sm:h-80 ${
-            flipped ? "[transform:rotateY(180deg)]" : ""
-          }`}
+          className={`relative block w-full text-left transition-transform duration-500 ${
+            card?.image_url ? "h-[22rem] sm:h-[24rem]" : "h-72 sm:h-80"
+          } ${flipped ? "[transform:rotateY(180deg)]" : ""}`}
           style={{ transformStyle: "preserve-3d" }}
           onClick={() => setFlipped((f) => !f)}
           aria-live="polite"
@@ -221,12 +223,15 @@ export function StudyView({ deckId }: { deckId: number }) {
         >
           {/* front (question) */}
           <div
-            className="absolute inset-0 flex flex-col items-center justify-center gap-4 rounded-2xl border bg-card p-8 text-center shadow-sm"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-3 overflow-hidden rounded-2xl border bg-card p-6 text-center shadow-sm"
             style={{ backfaceVisibility: "hidden" }}
           >
             <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
               Question
             </span>
+            {card?.image_url && (
+              <CardImage src={card.image_url} alt={`Image for: ${card.front}`} className="mt-1" />
+            )}
             <p className="text-xl font-medium leading-relaxed sm:text-2xl">{card?.front}</p>
             {card?.hint && hintShown && (
               <motion.p
@@ -244,12 +249,15 @@ export function StudyView({ deckId }: { deckId: number }) {
           </div>
           {/* back (answer) */}
           <div
-            className="absolute inset-0 flex flex-col items-center justify-center gap-4 rounded-2xl border bg-amber-50 p-8 text-center shadow-sm dark:bg-amber-500/10"
+            className="absolute inset-0 flex flex-col items-center justify-center gap-3 overflow-hidden rounded-2xl border bg-amber-50 p-6 text-center shadow-sm dark:bg-amber-500/10"
             style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
           >
             <span className="text-xs font-medium uppercase tracking-widest text-amber-600">
               Answer
             </span>
+            {card?.image_url && (
+              <CardImage src={card.image_url} alt={`Image for: ${card.back}`} className="mt-1" />
+            )}
             <p className="text-xl font-medium leading-relaxed sm:text-2xl">{card?.back}</p>
             <span className="absolute bottom-5 text-xs text-muted-foreground">
               How well did you know it?
