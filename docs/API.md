@@ -13,6 +13,10 @@ for gateway deployments — both behave identically.
 
 ## Authentication
 
+> **Rate limiting:** `POST /auth/register` and `POST /auth/login` are limited to
+> **10 requests per 5 minutes per client IP** (in-memory sliding window). Exceeding it
+> returns `429` with a `Retry-After` header and a `Too many attempts…` detail.
+
 ### `POST /auth/register` — create an account
 
 Request:
@@ -94,8 +98,9 @@ Response `201 Created` → `Deck` (as above, zero stats).
 ### `POST /decks/{id}/duplicate` — duplicate a deck → `201`
 
 Copies the deck (title becomes `"<title> (copy)"`, color/icon/description carried over)
-**with all of its cards**. Copied cards start as brand-new (SRS state zeroed, `due_at = NULL`
-→ due immediately), so the copy is fully studiable right away; review history does not carry over.
+**with all of its cards, including their tags**. Copied cards start as brand-new (SRS state
+zeroed, `due_at = NULL` → due immediately), so the copy is fully studiable right away;
+review history does not carry over.
 
 Response `201`: the new `Deck` object (same shape as the list endpoint, `card_count` and
 `due_count` already populated).
@@ -106,8 +111,12 @@ Response `201`: the new `Deck` object (same shape as the list endpoint, `card_co
 
 ### `GET /decks/{deck_id}/cards` — list cards (creation order) → `200` `[Card]`
 
+Optional query filters:
+- `?q=text` — case-insensitive substring match on front/back
+- `?tag=vocabulary` — exact, case-insensitive tag match
+
 ```json
-{ "id": 5, "deck_id": 1, "front": "hola", "back": "hello", "created_at": "...",
+{ "id": 5, "deck_id": 1, "front": "hola", "back": "hello", "tags": ["greetings", "a1"], "created_at": "...",
   "ease": 2.5, "interval_days": 0, "reps": 0, "lapses": 0, "due_at": null }
 ```
 
@@ -116,19 +125,23 @@ card (due immediately); otherwise the client renders `due` / `in Nd` chips from 
 
 ### `POST /decks/{deck_id}/cards` — add a card
 
-Request: `{ "front": "hola", "back": "hello" }` (front ≤ 1000 chars, back ≤ 2000) → `201`
+Request: `{ "front": "hola", "back": "hello", "tags": ["greetings"] }`
+(front ≤ 1000 chars, back ≤ 2000, up to 8 tags of ≤ 32 chars — trimmed and deduped
+case-insensitively by the server) → `201`
 
 ### `GET /decks/{deck_id}/cards/export` — export deck as CSV
 
 Response `200` with `Content-Type: text/csv` and `Content-Disposition: attachment`:
 
 ```csv
-front,back
-hola,hello
-gato,cat
+front,back,tags
+hola,hello,greetings|a1
+gato,cat,
 ```
 
-Header row included; output is a valid round-trip input for the bulk import endpoint.
+Header row included. The third `tags` column appears only when at least one card has
+tags (`|` separates tags inside the cell). Output remains a valid round-trip input for
+the bulk import endpoint.
 
 ### `POST /decks/{deck_id}/cards/bulk` — CSV import
 
@@ -143,10 +156,57 @@ Response `200`:
 { "imported": 3, "skipped": 1, "errors": ["Row 4: front and back must not be empty."] }
 ```
 
-Rules: delimiter auto-detected (`,` `;` tab) · optional header row · duplicates skipped
+Rules: delimiter auto-detected (`,` `;` tab) · optional header row · optional third column for tags (`|`-separated) · duplicates skipped
 silently · limits: 1 MB, 1000 rows · `422` if the file yields zero importable rows.
 
 ### `PUT /cards/{id}` — update (partial) · `DELETE /cards/{id}` — delete (`204`)
+
+---
+
+## Deck bundles (share)
+
+### `GET /decks/{id}/bundle` — export a portable JSON bundle → `200`
+
+```json
+{
+  "version": 1, "app": "deckio",
+  "title": "Spanish Basics", "description": "...", "color": "#f59e0b", "icon": "\xf0\x9f\x93\x9a",
+  "card_count": 2,
+  "cards": [
+    { "front": "hola", "back": "hello", "tags": ["greetings"] },
+    { "front": "gato", "back": "cat", "tags": [] }
+  ]
+}
+```
+
+Response carries `Content-Disposition: attachment` with a `<slug>-deckio.json` filename.
+SRS progress and review history are intentionally **not** included.
+
+### `POST /decks/import` — create a deck from a bundle → `201`
+
+Body: a previously exported bundle (min 1 card, max 1000). Creates a new deck owned by
+the caller with every card inserted as **new** (`due_at = null` → due immediately).
+Response: the new `DeckOut` (with the real `due_count`). Errors: `422` validation
+(empty cards array, bad color/icon, …).
+
+---
+
+## Search
+
+### `GET /search?q=<text>` — global search → `200`
+
+Searches the caller's decks (title / description) and cards (front / back / tags).
+Optional `?limit=` (1–25, default 8 per section).
+
+```json
+{
+  "decks": [ { "id": 1, "title": "Spanish Basics", "card_count": 8, "due_count": 3, "...": "..." } ],
+  "cards": [
+    { "card_id": 5, "deck_id": 1, "deck_title": "Spanish Basics",
+      "front": "hola", "back": "hello", "tags": ["greetings"] }
+  ]
+}
+```
 
 ---
 
@@ -264,6 +324,16 @@ for the weekly bar chart.
 - `mastered_cards` — cards with ≥ 3 reviews and ≥ 80% accuracy
 - `due_cards` — cards due right now across all decks (new or overdue per SM-2)
 - `activity` — last `days` days (UTC), ascending, missing days zero-filled
+
+### `GET /stats/sessions?limit=15` — recent sessions across all decks → `200`
+
+Newest first, with per-session accuracy and duration (null while a session is still open).
+
+```json
+[ { "id": 12, "deck_id": 1, "deck_title": "Spanish Basics", "mode": "study", "srs": true,
+    "started_at": "...", "finished_at": "...", "reviews": 8, "correct": 7,
+    "accuracy": 87.5, "duration_seconds": 62.4 } ]
+```
 
 ### `GET /stats/decks/{deck_id}` → `200`
 

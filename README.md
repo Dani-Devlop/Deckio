@@ -24,14 +24,16 @@ exposed through a clean REST API and bundled with a polished web client.
 
 ## ✨ Features
 
-- 🔐 **JWT authentication** — register / login, bcrypt-hashed passwords, bearer-token sessions
+- 🔐 **JWT authentication** — register / login, bcrypt-hashed passwords, bearer-token sessions, brute-force rate limiting on credential endpoints
 - 👤 **Account management** — password change (re-verifies current) and self-service account deletion with cascade cleanup
 - 🗂 **Deck management** — CRUD with color accents, emoji icons, search, sorting, live stats, **one-click duplication** (cards copied, SRS progress reset)
-- 🃏 **Flashcards** — CRUD per deck, plus **CSV bulk import & export** (delimiter auto-detection, per-row error reports, round-trip files)
+- 🃏 **Flashcards** — CRUD per deck, free-form **tags** (max 8/card), plus **CSV bulk import & export** (delimiter auto-detection, per-row error reports, round-trip files incl. tags)
+- 🔎 **Global search (⌘K)** — command palette searching decks, card text and tags, with quick actions
+- 🔗 **Deck bundles** — export any deck as a portable JSON bundle (cards + tags) and import it on any account — deck sharing made easy
 - 📖 **Study mode** — server-tracked sessions, random card order, self-grading, progress resume
 - ✨ **Spaced repetition (SM-2)** — *Smart review* sessions cover only due cards; correct answers grow the interval (1d → 3d → interval × ease), lapses reschedule in 10 minutes
-- 🧠 **Quiz mode** — auto-generated questions with **4 options** (1 correct + 3 distractors), instant feedback, full result breakdown
-- 📊 **Analytics** — accuracy, review streaks, **26-week review heatmap**, 7-day activity, mastered cards, per-deck stats, **weak-card detection**
+- 🧠 **Quiz mode** — auto-generated questions with **4 options** (1 correct + 3 distractors), pickable quiz length (5 / 10 / 15 / all), instant feedback, full result breakdown
+- 📊 **Analytics** — accuracy, review streaks, **26-week review heatmap**, 7-day activity, mastered cards, per-deck stats, **weak-card detection**, recent-session history
 - 🖥 **Web app included** — responsive, dark-mode ready client that speaks to the API out of the box
 - 🐳 **One-command deployment** — `docker compose up --build`
 
@@ -133,10 +135,12 @@ Full reference with examples: **[docs/API.md](docs/API.md)** · Interactive: **`
 | `GET` | `/decks` | List decks with card counts & accuracy |
 | `POST` | `/decks` | Create deck |
 | `GET/PUT/DELETE` | `/decks/{id}` | Read / update / delete deck |
-| `POST` | `/decks/{id}/duplicate` | **Duplicate deck** (cards copied, SRS reset) |
-| `GET` | `/decks/{id}/cards` | List cards |
-| `POST` | `/decks/{id}/cards` | Add card |
-| `GET` | `/decks/{id}/cards/export` | **Export deck as CSV** (`front,back`) |
+| `POST` | `/decks/{id}/duplicate` | **Duplicate deck** (cards copied incl. tags, SRS reset) |
+| `GET` | `/decks/{id}/bundle` | **Export deck as JSON bundle** (cards + tags, shareable) |
+| `POST` | `/decks/import` | **Import a deck bundle** (creates deck + cards, SRS reset) |
+| `GET` | `/decks/{id}/cards` | List cards (`?q=` text search, `?tag=` exact tag filter) |
+| `POST` | `/decks/{id}/cards` | Add card (with optional `tags` array) |
+| `GET` | `/decks/{id}/cards/export` | **Export deck as CSV** (`front,back[,tags]`) |
 | `POST` | `/decks/{id}/cards/bulk` | **CSV bulk import** (multipart `file` or raw `text/csv`) |
 | `PUT/DELETE` | `/cards/{id}` | Update / delete card |
 | `POST` | `/decks/{id}/study/start` | Open a study session (`?srs=true` → only due cards) |
@@ -146,8 +150,10 @@ Full reference with examples: **[docs/API.md](docs/API.md)** · Interactive: **`
 | `POST` | `/quiz/answer` | Submit an answer (validated server-side) |
 | `GET` | `/quiz/{session_id}/result` | Score, duration, per-question breakdown |
 | `GET` | `/stats/overview` | Totals, accuracy, streak, activity window (`?days=`, 7–366), mastered cards |
+| `GET` | `/stats/sessions` | **Recent sessions** across all decks (`?limit=`, newest first) |
 | `GET` | `/stats/decks/{id}` | Per-deck stats + recent sessions |
 | `GET` | `/stats/weak-cards` | Cards with the lowest accuracy |
+| `GET` | `/search?q=` | **Global search** — matching decks (with stats) + cards (front/back/tags) |
 
 Every router is mounted **twice** — at the root (`/decks`) and under `/api` (`/api/decks`) —
 so the API works standalone and behind the sandbox preview gateway without code changes.
@@ -159,12 +165,28 @@ front,back
 What does ORM stand for?,Object-Relational Mapping
 ¿Cómo se dice "hello" en español?;hola        ← semicolons also work
 front<tab>back                                ← and tabs; header row optional
+hola,hello,greetings|a1                       ← optional 3rd column = tags (| separated)
 ```
 
 - Delimiter **auto-detected** (comma / semicolon / tab), quotes supported
 - Optional header row is recognized (`front,back`, `question,answer`, …)
+- Optional **tags column** — `|`-separated inside the cell; CSV export includes it back when any card has tags
 - Invalid rows are reported **with row numbers**; exact duplicates are skipped
 - Limits: 1 MB per upload, 1000 cards per import
+
+## 🏷 Tags
+
+Cards accept up to **8 free-form tags** (32 chars each, case-insensitively de-duplicated).
+The web client renders them as chips on each card, offers a **filter row** per deck, and the
+⌘K command palette searches them. Tag filters are also available on the API via
+`GET /decks/{id}/cards?tag=...`.
+
+## 🔗 Deck bundles (share)
+
+`GET /decks/{id}/bundle` downloads a portable JSON snapshot (deck metadata + cards + tags,
+no SRS history). Send the file to a friend (or your other account) and `POST /decks/import`
+creates a fresh copy with all cards due immediately. The web UI wraps both directions:
+**Export bundle (JSON)** in every deck menu and **Import bundle** on the dashboard.
 
 ## 📁 Project structure
 
@@ -180,13 +202,14 @@ Deckio/
 │   │   ├── security.py       # bcrypt hashing + JWT encode/decode
 │   │   ├── deps.py           # auth + ownership dependencies
 │   │   ├── utils/csv_import.py
-│   │   └── routers/          # auth, decks, cards, study, quiz, stats
+│   │   ├── utils/ratelimit.py # sliding-window brute-force guard (auth)
+│   │   └── routers/          # auth, decks, cards, study, quiz, stats, search
 │   ├── requirements.txt
 │   ├── Dockerfile
 │   └── .env.example
 ├── src/                      # Next.js 16 web app (App Router)
 │   ├── app/                  # layout + single-page client app
-│   ├── components/flashcards/# auth, dashboard, deck detail, study, quiz, stats
+│   ├── components/flashcards/# auth, dashboard, deck detail, study, quiz, stats, command palette
 │   └── lib/                  # typed API client, zustand store, helpers
 ├── docs/API.md               # full API reference
 ├── scripts/dev-backend.sh    # local backend dev helper
@@ -196,15 +219,15 @@ Deckio/
 
 ## 🧪 Quality
 
-- **36-check end-to-end API smoke suite** (auth, CRUD, CSV edge cases, session flow, stats math) — all passing
+- **62-check cumulative API smoke suite** (auth, CRUD, CSV edge cases, tags, search, bundles, session flow, stats math, rate limiting) — all passing
 - ESLint clean (Next.js 16 + react-hooks rules)
 - Ownership enforced on every resource; foreign ids return `404` (no existence leaks)
 - Typed end-to-end: Pydantic schemas ↔ TypeScript interfaces in `src/lib/types.ts`
 
 ## 🔭 Roadmap ideas
 
-- Spaced repetition scheduling (SM-2) · image occlusion cards · deck sharing
-- Refresh tokens / OAuth · per-card hints & tags · export decks as CSV/Anki
+- Image occlusion cards · public share links (read-only web view)
+- Refresh tokens / OAuth · Alembic migrations · card hints
 
 ---
 
