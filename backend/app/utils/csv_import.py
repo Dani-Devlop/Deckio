@@ -1,0 +1,93 @@
+"""CSV parsing for the bulk card import endpoint.
+
+Accepted formats (delimiter auto-detected: comma, semicolon or tab):
+
+    front,back
+    "What is ORM?","Object-Relational Mapping"
+    What is FastAPI?;A modern async Python web framework
+
+A header row is optional; it is detected when the first two cells are common
+column names (front/back/question/answer/...). Exact duplicate rows within a
+file are silently de-duplicated; invalid rows are reported with row numbers.
+"""
+
+import csv
+import io
+
+MAX_FRONT_LEN = 1000
+MAX_BACK_LEN = 2000
+MAX_ROWS_PER_IMPORT = 1000
+
+_HEADER_TOKENS = {
+    "front",
+    "back",
+    "question",
+    "answer",
+    "term",
+    "definition",
+    "word",
+    "translation",
+    "prompt",
+    "response",
+}
+
+
+def parse_cards_csv(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Parse raw CSV text into `(cards, errors)`.
+
+    Returns:
+        cards:  validated (front, back) tuples, de-duplicated, in file order.
+        errors: human-readable messages with row numbers for the UI.
+    """
+    errors: list[str] = []
+    cards: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    # Normalize line endings and strip a possible UTF-8 BOM.
+    text = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
+    if not text.strip():
+        return [], ["The file is empty."]
+
+    # Sniff the delimiter from a small sample; fall back to plain comma.
+    try:
+        dialect = csv.Sniffer().sniff(text[:2048], delimiters=",;\t")
+    except csv.Error:
+        dialect = csv.excel
+
+    rows = [
+        row
+        for row in csv.reader(io.StringIO(text), dialect)
+        if any(cell.strip() for cell in row)  # skip blank lines
+    ]
+
+    for i, row in enumerate(rows, start=1):
+        if i == 1 and _looks_like_header(row):
+            continue  # optional header row
+        if len(row) < 2:
+            errors.append(f"Row {i}: expected 2 columns (front, back), got {len(row)}.")
+            continue
+
+        front, back = row[0].strip(), row[1].strip()
+        if not front or not back:
+            errors.append(f"Row {i}: front and back must not be empty.")
+            continue
+        if len(front) > MAX_FRONT_LEN:
+            errors.append(f"Row {i}: front exceeds {MAX_FRONT_LEN} characters.")
+            continue
+        if len(back) > MAX_BACK_LEN:
+            errors.append(f"Row {i}: back exceeds {MAX_BACK_LEN} characters.")
+            continue
+
+        pair = (front, back)
+        if pair in seen:
+            continue  # silent duplicate skip
+        seen.add(pair)
+        cards.append(pair)
+
+    return cards, errors
+
+
+def _looks_like_header(row: list[str]) -> bool:
+    """True when the first row's first two cells are recognized column names."""
+    cells = [cell.strip().lower() for cell in row[:2]]
+    return len(cells) == 2 and all(c in _HEADER_TOKENS for c in cells)
