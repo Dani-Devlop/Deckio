@@ -95,6 +95,52 @@ async def _collect_stats(user: User, db: AsyncSession, deck_ids: set[int]) -> di
     return stats
 
 
+@router.post(
+    "/{deck_id}/duplicate",
+    response_model=DeckOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="Duplicate a deck (cards copied, SRS progress reset)",
+)
+async def duplicate_deck(
+    deck: Deck = Depends(get_owned_deck),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> DeckOut:
+    """Copy the deck together with all of its cards.
+
+    Copies start as *new* cards (SRS state zeroed, `due_at = NULL` → due
+    immediately) so the duplicate can be studied right away — review history
+    intentionally does NOT carry over. The copy is named `"<title> (copy)"`.
+    """
+    cards = (
+        await db.scalars(select(Card).where(Card.deck_id == deck.id))
+    ).all()
+
+    copy = Deck(
+        user_id=user.id,
+        title=f"{deck.title} (copy)"[:120],  # respect the column limit
+        description=deck.description,
+        color=deck.color,
+        icon=deck.icon,
+    )
+    db.add(copy)
+    await db.flush()  # assign copy.id before inserting child cards
+
+    # New cards keep front/back only — SRS fields use their model defaults.
+    db.add_all([Card(deck_id=copy.id, front=c.front, back=c.back) for c in cards])
+    await db.commit()
+    await db.refresh(copy)
+
+    # Copied cards are brand-new → all due immediately; compute the real
+    # due stat so the dashboard's "N due" badge is correct on first paint.
+    due = await db.scalar(
+        select(func.count())
+        .select_from(Card)
+        .where(Card.deck_id == copy.id, or_(Card.due_at.is_(None), Card.due_at <= utcnow()))
+    )
+    return _to_deck_out(copy, {"card_count": len(cards), "due": int(due or 0)})
+
+
 @router.get("", response_model=list[DeckOut], summary="List the authenticated user's decks")
 async def list_decks(
     user: User = Depends(get_current_user),

@@ -42,6 +42,23 @@ class AuthResponse(BaseModel):
     user: UserOut
 
 
+class PasswordChange(BaseModel):
+    """Change-password payload — the current password must be re-supplied."""
+
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128, description="New password, min 8 chars")
+
+
+class AccountDelete(BaseModel):
+    """Account-deletion confirmation — requires the current password.
+
+    Sent as a JSON body on POST (DELETE-with-body is unreliable across
+    proxies, so a dedicated POST route is safer).
+    """
+
+    password: str = Field(min_length=1, max_length=128)
+
+
 # ============================== Decks ==============================
 
 
@@ -107,6 +124,14 @@ class CardOut(BaseModel):
     front: str
     back: str
     created_at: datetime
+    # --- Spaced-repetition state (read-only surface for the web UI) ---
+    # due_at == NULL means "new card" → due immediately; otherwise the
+    # frontend renders a "due" / "in Nd" chip from this timestamp.
+    ease: float = 2.5
+    interval_days: int = 0
+    reps: int = 0
+    lapses: int = 0
+    due_at: datetime | None = None
 
 
 class BulkImportResult(BaseModel):
@@ -224,7 +249,7 @@ class StatsOverview(BaseModel):
     streak_days: int
     mastered_cards: int
     due_cards: int
-    activity: list[ActivityDay]  # last 7 days, ascending
+    activity: list[ActivityDay]  # last `days` days, ascending (client chooses window)
 
 
 class DeckSessionOut(BaseModel):

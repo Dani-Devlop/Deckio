@@ -1,13 +1,20 @@
-"""Authentication endpoints: register, login, me."""
+"""Authentication endpoints: register, login, me, password change, account deletion."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..deps import get_current_user
 from ..models import User
-from ..schemas import AuthResponse, LoginRequest, UserCreate, UserOut
+from ..schemas import (
+    AccountDelete,
+    AuthResponse,
+    LoginRequest,
+    PasswordChange,
+    UserCreate,
+    UserOut,
+)
 from ..security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -58,3 +65,57 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> Au
 async def me(user: User = Depends(get_current_user)) -> User:
     """Used by the web client to restore a session from a stored token."""
     return user
+
+
+@router.put(
+    "/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Change the account password",
+)
+async def change_password(
+    payload: PasswordChange,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Re-verify the current password, then store a fresh bcrypt hash.
+
+    Existing JWTs stay valid (they are stateless) — the client simply keeps
+    its session; only future logins need the new password.
+    """
+    if not verify_password(payload.current_password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Current password is incorrect",
+        )
+    if payload.current_password == payload.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="New password must be different from the current one",
+        )
+    user.hashed_password = hash_password(payload.new_password)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/account/delete",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete the account (requires password)",
+)
+async def delete_account(
+    payload: AccountDelete,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Delete the user row; decks → cards → sessions → reviews all cascade
+    at the DB level. Issued JWTs become unusable on the next `/auth/me` call
+    (the user row no longer exists).
+    """
+    if not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password is incorrect",
+        )
+    await db.delete(user)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

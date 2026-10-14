@@ -7,7 +7,7 @@ enforce ownership). Aggregations happen in SQL; only small post-processing
 
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -50,6 +50,12 @@ def _streak_days(review_dates: set[date]) -> int:
 async def stats_overview(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    days: int = Query(
+        default=7,
+        ge=7,
+        le=366,
+        description="Length of the activity window in days (7 = weekly bars, 91 = 13-week heatmap)",
+    ),
 ) -> StatsOverview:
     total_decks = await db.scalar(
         select(func.count()).select_from(Deck).where(Deck.user_id == user.id)
@@ -83,7 +89,9 @@ async def stats_overview(
     total_reviews = len(review_rows)
     correct_reviews = sum(1 for result, _ in review_rows if result == "correct")
 
-    # ---- Activity: last 7 days (UTC), missing days filled with zeros ----
+    # ---- Activity: last `days` days (UTC), missing days filled with zeros ----
+    # The window length is configurable so the web client can request a
+    # 13-week (91-day) range for its review heatmap in the same call.
     today = datetime.now(timezone.utc).date()
     counts: dict[date, int] = {}
     corrects: dict[date, int] = {}
@@ -94,11 +102,11 @@ async def stats_overview(
             corrects[day] = corrects.get(day, 0) + 1
     activity = [
         ActivityDay(
-            date=str(today - timedelta(days=6 - i)),
-            reviews=counts.get(today - timedelta(days=6 - i), 0),
-            correct=corrects.get(today - timedelta(days=6 - i), 0),
+            date=str(today - timedelta(days=days - 1 - i)),
+            reviews=counts.get(today - timedelta(days=days - 1 - i), 0),
+            correct=corrects.get(today - timedelta(days=days - 1 - i), 0),
         )
-        for i in range(7)
+        for i in range(days)
     ]
 
     # ---- Mastered cards: enough reviews AND high accuracy ----
