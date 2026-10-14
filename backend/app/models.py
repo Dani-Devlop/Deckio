@@ -39,6 +39,9 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
+    # Daily review goal (reviews per day) — powers the goal ring on the stats
+    # dashboard. Purely motivational, never enforced by the API.
+    daily_goal: Mapped[int] = mapped_column(Integer, default=20)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # One user owns many decks; deleting a user deletes their decks.
@@ -57,6 +60,9 @@ class Deck(Base):
     description: Mapped[str | None] = mapped_column(Text, default=None)
     color: Mapped[str] = mapped_column(String(16), default="#f59e0b")  # hex accent for the UI
     icon: Mapped[str] = mapped_column(String(8), default="📚")  # emoji icon for the UI
+    # Public read-only share token (secrets.token_urlsafe). NULL = private.
+    # The web client builds a `/?share=<token>` preview URL from it.
+    share_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     owner: Mapped["User"] = relationship(back_populates="decks")
@@ -80,6 +86,8 @@ class Card(Base):
     # implementation detail that keeps SQLite/PG schemas simple and lets the
     # search filter use a plain LIKE.
     tags: Mapped[str | None] = mapped_column(Text, default=None)
+    # Optional memory aid shown on the question side before flipping.
+    hint: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # --- Spaced repetition state (simplified SM-2, updated on study reviews) ---

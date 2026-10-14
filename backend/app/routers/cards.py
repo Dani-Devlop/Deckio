@@ -70,6 +70,7 @@ async def create_card(
         front=payload.front,
         back=payload.back,
         tags=tags_to_storage(payload.tags),
+        hint=payload.hint,
     )
     db.add(card)
     await db.commit()
@@ -122,8 +123,8 @@ async def export_cards_csv(
 ) -> PlainTextResponse:
     """Round-trip companion to the bulk import: the exported file can be
     re-imported into any other deck (or into Anki-style tools) as-is.
-    A third `tags` column is included when any card carries tags; the bulk
-    importer accepts it back (tags separated by `|` inside the cell)."""
+    Optional `tags` (3rd, `|`-separated) and `hint` (4th) columns are included
+    only when at least one card uses them; the bulk importer accepts them back."""
     cards = (
         await db.scalars(
             select(Card).where(Card.deck_id == deck.id).order_by(Card.created_at, Card.id)
@@ -131,13 +132,22 @@ async def export_cards_csv(
     ).all()
 
     include_tags = any(c.tags for c in cards)
+    include_hints = any(c.hint for c in cards)
+    header = ["front", "back"]
+    if include_tags:
+        header.append("tags")
+    if include_hints:
+        header.append("hint")
+
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["front", "back", "tags"] if include_tags else ["front", "back"])
+    writer.writerow(header)
     for card in cards:
         row = [card.front, card.back]
         if include_tags:
             row.append("|".join(t.strip() for t in (card.tags or "").split(",") if t.strip()))
+        if include_hints:
+            row.append(card.hint or "")
         writer.writerow(row)
 
     # Filesystem-safe filename derived from the deck title.
@@ -168,7 +178,8 @@ async def bulk_import_cards(
     - a raw request body with `Content-Type: text/csv` / `text/plain`.
 
     CSV format: two columns `front,back` (delimiter auto-detected:
-    comma / semicolon / tab). An optional header row is tolerated.
+    comma / semicolon / tab). Optional extra columns: `tags` (`|`-separated)
+    and `hint`. An optional header row is tolerated.
     Rows that fail validation are reported with their row numbers.
     """
     content_type = request.headers.get("content-type", "")
@@ -203,11 +214,17 @@ async def bulk_import_cards(
         )
 
     # Single bulk insert — one flush for the whole file. Each parsed row is a
-    # (front, back, tags) tuple; tags is [] when the CSV has no tags column.
+    # (front, back, tags, hint) tuple; tags is [] / hint None when absent.
     db.add_all(
         [
-            Card(deck_id=deck.id, front=front, back=back, tags=tags_to_storage(tag_list))
-            for front, back, tag_list in cards
+            Card(
+                deck_id=deck.id,
+                front=front,
+                back=back,
+                tags=tags_to_storage(tag_list),
+                hint=hint,
+            )
+            for front, back, tag_list, hint in cards
         ]
     )
     await db.commit()

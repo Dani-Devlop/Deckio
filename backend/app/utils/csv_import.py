@@ -6,12 +6,14 @@ Accepted formats (delimiter auto-detected: comma, semicolon or tab):
     "What is ORM?","Object-Relational Mapping"
     What is FastAPI?;A modern async Python web framework
     hola,hello,vocabulary|basics          ← optional 3rd column = tags
+    hola,hello,vocabulary,think "oh-la"   ← optional 4th column = hint
 
 An optional header row is tolerated; it is detected when the first cells are
-column names (front/back/question/answer/tags/...). The optional third column
-holds tags separated by `|` (e.g. `verbs|beginner`). Exact duplicate rows
-within a file are silently de-duplicated; invalid rows are reported with row
-numbers.
+column names (front/back/question/answer/tags/hint/...). The optional third
+column holds tags separated by `|` (e.g. `verbs|beginner`); the optional
+fourth column is a hint shown on the question side while studying. Exact
+duplicate rows within a file are silently de-duplicated; invalid rows are
+reported with row numbers.
 """
 
 import csv
@@ -19,9 +21,10 @@ import io
 
 MAX_FRONT_LEN = 1000
 MAX_BACK_LEN = 2000
+MAX_HINT_LEN = 300
 MAX_ROWS_PER_IMPORT = 1000
 
-CsvCard = tuple[str, str, list[str]]  # (front, back, tags)
+CsvCard = tuple[str, str, list[str], str | None]  # (front, back, tags, hint)
 
 _HEADER_TOKENS = {
     "front",
@@ -35,6 +38,7 @@ _HEADER_TOKENS = {
     "prompt",
     "response",
     "tags",  # optional 3rd column
+    "hint",  # optional 4th column
 }
 
 
@@ -42,7 +46,7 @@ def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
     """Parse raw CSV text into `(cards, errors)`.
 
     Returns:
-        cards:  validated (front, back, tags) tuples, de-duplicated, in file order.
+        cards:  validated (front, back, tags, hint) tuples, de-duplicated, in file order.
         errors: human-readable messages with row numbers for the UI.
     """
     errors: list[str] = []
@@ -89,11 +93,16 @@ def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
         if len(row) >= 3:
             tags = [t.strip() for t in row[2].split("|") if t.strip()]
 
+        # Optional fourth column: hint (trimmed, capped, empty → None).
+        hint: str | None = None
+        if len(row) >= 4:
+            hint = row[3].strip()[:MAX_HINT_LEN] or None
+
         pair = (front, back)
         if pair in seen:
             continue  # silent duplicate skip
         seen.add(pair)
-        cards.append((front, back, tags))
+        cards.append((front, back, tags, hint))
 
     return cards, errors
 

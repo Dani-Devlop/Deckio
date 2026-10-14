@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .database import Base, engine, run_startup_migrations
-from .routers import auth, cards, decks, quiz, search, stats, study
+from .routers import auth, cards, decks, public, quiz, search, stats, study
 
 
 @asynccontextmanager
@@ -61,6 +61,7 @@ app.include_router(study.router)
 app.include_router(quiz.router)
 app.include_router(stats.router)
 app.include_router(search.router)
+app.include_router(public.router)
 app.include_router(auth.router, prefix="/api")
 app.include_router(decks.router, prefix="/api")
 app.include_router(cards.router, prefix="/api")
@@ -68,6 +69,7 @@ app.include_router(study.router, prefix="/api")
 app.include_router(quiz.router, prefix="/api")
 app.include_router(stats.router, prefix="/api")
 app.include_router(search.router, prefix="/api")
+app.include_router(public.router, prefix="/api")
 
 
 @app.get("/health", tags=["Meta"])

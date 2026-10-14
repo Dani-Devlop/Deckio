@@ -6,8 +6,9 @@ dashboard stays fast as the library grows.
 """
 
 import re
+import secrets
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,10 +23,14 @@ from ..schemas import (
     DeckCreate,
     DeckOut,
     DeckUpdate,
+    ShareLinkOut,
     tags_to_storage,
 )
 
 router = APIRouter(prefix="/decks", tags=["Decks"])
+
+# Length of generated public share tokens (token_urlsafe(12) → ~16 chars).
+SHARE_TOKEN_BYTES = 12
 
 
 def _to_deck_out(deck: Deck, stats: dict) -> DeckOut:
@@ -44,6 +49,7 @@ def _to_deck_out(deck: Deck, stats: dict) -> DeckOut:
         accuracy=round(correct / reviews * 100, 1) if reviews else None,
         last_studied_at=stats.get("last_studied_at"),
         due_count=stats.get("due", 0),
+        share_token=deck.share_token,
     )
 
 
@@ -137,9 +143,13 @@ async def duplicate_deck(
     db.add(copy)
     await db.flush()  # assign copy.id before inserting child cards
 
-    # New cards keep front/back/tags — SRS fields use their model defaults.
+    # New cards keep front/back/tags/hint — SRS fields use their model defaults.
+    # The copy is NOT shared even if the original was (share_token stays NULL).
     db.add_all(
-        [Card(deck_id=copy.id, front=c.front, back=c.back, tags=c.tags) for c in cards]
+        [
+            Card(deck_id=copy.id, front=c.front, back=c.back, tags=c.tags, hint=c.hint)
+            for c in cards
+        ]
     )
     await db.commit()
     await db.refresh(copy)
@@ -222,6 +232,64 @@ async def delete_deck(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# ------------------------- Public share links -------------------------
+
+
+def _share_out(deck: Deck) -> ShareLinkOut:
+    return ShareLinkOut(
+        share_token=deck.share_token,
+        share_path=f"/?share={deck.share_token}" if deck.share_token else None,
+    )
+
+
+@router.get(
+    "/{deck_id}/share",
+    response_model=ShareLinkOut,
+    summary="Get the deck's public share-link state",
+)
+async def get_share_link(
+    deck: Deck = Depends(get_owned_deck),
+) -> ShareLinkOut:
+    """Returns the current token (or null when the deck is private)."""
+    return _share_out(deck)
+
+
+@router.post(
+    "/{deck_id}/share",
+    response_model=ShareLinkOut,
+    summary="Create (or return) the deck's public read-only share link",
+)
+async def create_share_link(
+    deck: Deck = Depends(get_owned_deck),
+    db: AsyncSession = Depends(get_db),
+    regenerate: bool = Query(
+        default=False, description="Issue a NEW token, invalidating the old link"
+    ),
+) -> ShareLinkOut:
+    """Idempotent by default: an existing link is returned unchanged so
+    already-shared URLs never break accidentally. Pass `?regenerate=true`
+    to rotate the token (old links stop working)."""
+    if deck.share_token is None or regenerate:
+        deck.share_token = secrets.token_urlsafe(SHARE_TOKEN_BYTES)
+        await db.commit()
+        await db.refresh(deck)
+    return _share_out(deck)
+
+
+@router.delete(
+    "/{deck_id}/share",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Revoke the deck's public share link (deck becomes private again)",
+)
+async def revoke_share_link(
+    deck: Deck = Depends(get_owned_deck),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    deck.share_token = None
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 # ------------------------- Deck bundle (share) -------------------------
 
 
@@ -255,6 +323,7 @@ async def export_deck_bundle(
                 front=c.front,
                 back=c.back,
                 tags=[t.strip() for t in (c.tags or "").split(",") if t.strip()],
+                hint=c.hint,
             )
             for c in cards
         ],
@@ -290,7 +359,13 @@ async def import_deck_bundle(
 
     db.add_all(
         [
-            Card(deck_id=deck.id, front=c.front, back=c.back, tags=tags_to_storage(c.tags))
+            Card(
+                deck_id=deck.id,
+                front=c.front,
+                back=c.back,
+                tags=tags_to_storage(c.tags),
+                hint=c.hint,
+            )
             for c in payload.cards
         ]
     )

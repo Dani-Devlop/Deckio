@@ -10,6 +10,7 @@ from ..models import User
 from ..schemas import (
     AccountDelete,
     AuthResponse,
+    GoalUpdate,
     LoginRequest,
     PasswordChange,
     UserCreate,
@@ -76,6 +77,20 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> Au
 @router.get("/me", response_model=UserOut, summary="Get the authenticated user")
 async def me(user: User = Depends(get_current_user)) -> User:
     """Used by the web client to restore a session from a stored token."""
+    return user
+
+
+@router.put("/goal", response_model=UserOut, summary="Set the daily review goal")
+async def set_daily_goal(
+    payload: GoalUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Update the motivational daily review goal (1–500 reviews/day).
+    Surfaced on the stats dashboard as a progress ring."""
+    user.daily_goal = payload.daily_goal
+    await db.commit()
+    await db.refresh(user)
     return user
 
 

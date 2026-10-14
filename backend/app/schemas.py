@@ -33,7 +33,14 @@ class UserOut(BaseModel):
 
     id: int
     email: EmailStr
+    daily_goal: int = 20
     created_at: datetime
+
+
+class GoalUpdate(BaseModel):
+    """Daily review goal (reviews/day) — used by the stats goal ring."""
+
+    daily_goal: int = Field(ge=1, le=500)
 
 
 class AuthResponse(BaseModel):
@@ -99,12 +106,24 @@ class DeckOut(BaseModel):
     accuracy: float | None = None  # percentage 0–100
     last_studied_at: datetime | None = None
     due_count: int = 0  # cards due for review (SM-2 spaced repetition)
+    # Public share link token (null = private). The client builds
+    # `/?share=<token>` preview URLs from it.
+    share_token: str | None = None
 
 
 # ============================== Cards ==============================
 
 MAX_TAGS_PER_CARD = 8
 MAX_TAG_LENGTH = 32
+MAX_HINT_LENGTH = 300
+
+
+def clean_hint(hint: str | None) -> str | None:
+    """Normalize a hint: trim, drop empties, cap length."""
+    if hint is None:
+        return None
+    hint = hint.strip()
+    return hint[:MAX_HINT_LENGTH] or None
 
 
 def clean_tags(tags: list[str]) -> list[str]:
@@ -138,11 +157,21 @@ class CardBase(BaseModel):
         default_factory=list,
         description=f"Free-form labels (max {MAX_TAGS_PER_CARD}, {MAX_TAG_LENGTH} chars each)",
     )
+    hint: str | None = Field(
+        default=None,
+        max_length=MAX_HINT_LENGTH,
+        description="Optional memory aid shown before flipping",
+    )
 
     @field_validator("tags")
     @classmethod
     def _clean(cls, v: list[str]) -> list[str]:
         return clean_tags(v)
+
+    @field_validator("hint")
+    @classmethod
+    def _clean_hint(cls, v: str | None) -> str | None:
+        return clean_hint(v)
 
 
 class CardCreate(CardBase):
@@ -153,11 +182,17 @@ class CardUpdate(BaseModel):
     front: str | None = Field(default=None, min_length=1, max_length=1000)
     back: str | None = Field(default=None, min_length=1, max_length=2000)
     tags: list[str] | None = Field(default=None)
+    hint: str | None = Field(default=None, max_length=MAX_HINT_LENGTH)
 
     @field_validator("tags")
     @classmethod
     def _clean(cls, v: list[str] | None) -> list[str] | None:
         return None if v is None else clean_tags(v)
+
+    @field_validator("hint")
+    @classmethod
+    def _clean_hint(cls, v: str | None) -> str | None:
+        return clean_hint(v)
 
 
 class CardOut(BaseModel):
@@ -168,6 +203,7 @@ class CardOut(BaseModel):
     front: str
     back: str
     tags: list[str] = []
+    hint: str | None = None
     created_at: datetime
     # --- Spaced-repetition state (read-only surface for the web UI) ---
     # due_at == NULL means "new card" → due immediately; otherwise the
@@ -239,6 +275,7 @@ class QuizQuestion(BaseModel):
     card_id: int
     front: str
     options: list[str]
+    hint: str | None = None  # optional memory aid, may be revealed by the client
 
 
 class QuizStartOut(BaseModel):
@@ -304,6 +341,9 @@ class StatsOverview(BaseModel):
     streak_days: int
     mastered_cards: int
     due_cards: int
+    # Daily goal ring: reviews completed today (UTC) vs the user's goal.
+    today_reviews: int = 0
+    daily_goal: int = 20
     activity: list[ActivityDay]  # last `days` days, ascending (client chooses window)
 
 
@@ -387,11 +427,17 @@ class BundleCardIn(BaseModel):
     front: str = Field(min_length=1, max_length=1000)
     back: str = Field(min_length=1, max_length=2000)
     tags: list[str] = Field(default_factory=list)
+    hint: str | None = Field(default=None, max_length=MAX_HINT_LENGTH)
 
     @field_validator("tags")
     @classmethod
     def _clean(cls, v: list[str]) -> list[str]:
         return clean_tags(v)
+
+    @field_validator("hint")
+    @classmethod
+    def _clean_hint(cls, v: str | None) -> str | None:
+        return clean_hint(v)
 
 
 class DeckBundleIn(BaseModel):
@@ -415,3 +461,33 @@ class DeckBundleOut(BaseModel):
     icon: str
     card_count: int
     cards: list[BundleCardIn]
+
+
+# ============================== Share links & public decks ==============================
+
+
+class ShareLinkOut(BaseModel):
+    """Public share state of a deck (token is enough — the client builds URLs)."""
+
+    share_token: str | None = None
+    share_path: str | None = None  # e.g. "/?share=abc123" (relative SPA route)
+
+
+class PublicCardOut(BaseModel):
+    """One card on the public read-only deck preview (no SRS/owner data)."""
+
+    front: str
+    back: str
+    tags: list[str] = []
+    hint: str | None = None
+
+
+class PublicDeckOut(BaseModel):
+    """Read-only deck preview served WITHOUT authentication via a share token."""
+
+    title: str
+    description: str | None
+    color: str
+    icon: str
+    card_count: int
+    cards: list[PublicCardOut]

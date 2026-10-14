@@ -61,6 +61,7 @@ async def run_startup_migrations() -> None:
             "lapses": "ALTER TABLE cards ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0",
             "due_at": "ALTER TABLE cards ADD COLUMN due_at DATETIME",
             "tags": "ALTER TABLE cards ADD COLUMN tags TEXT",
+            "hint": "ALTER TABLE cards ADD COLUMN hint TEXT",
         }
         for name, ddl in card_additions.items():
             if name not in card_cols:
@@ -70,6 +71,19 @@ async def run_startup_migrations() -> None:
         if "srs" not in session_cols:
             sync_conn.exec_driver_sql(
                 "ALTER TABLE study_sessions ADD COLUMN srs BOOLEAN NOT NULL DEFAULT 0"
+            )
+
+        user_cols = {c["name"] for c in insp.get_columns("users")}
+        if "daily_goal" not in user_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN daily_goal INTEGER NOT NULL DEFAULT 20"
+            )
+
+        deck_cols = {c["name"] for c in insp.get_columns("decks")}
+        if "share_token" not in deck_cols:
+            sync_conn.exec_driver_sql("ALTER TABLE decks ADD COLUMN share_token TEXT")
+            sync_conn.exec_driver_sql(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_decks_share_token ON decks (share_token)"
             )
 
     async with engine.begin() as conn:

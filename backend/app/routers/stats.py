@@ -139,6 +139,9 @@ async def stats_overview(
         streak_days=_streak_days(set(counts.keys())),
         mastered_cards=mastered,
         due_cards=int(due_cards or 0),
+        # Daily-goal ring inputs: reviews logged today (UTC) vs the user's goal.
+        today_reviews=counts.get(today, 0),
+        daily_goal=user.daily_goal,
         activity=activity,
     )
 
