@@ -1,0 +1,57 @@
+"""Deckio Flashcards API — application entrypoint (Step 1: scaffold + health).
+
+Routers are registered incrementally in later steps (auth, decks, cards,
+study, quiz, stats). Every router is mounted twice:
+  - at the root      → canonical REST paths (e.g. `/decks`)
+  - under `/api`     → gateway-friendly paths used by the bundled web client
+Both expose identical behaviour, so the API works standalone AND behind the
+sandbox preview gateway without any code changes.
+"""
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from .config import settings
+from .database import Base, engine
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Create database tables on startup (safe for SQLite & PostgreSQL).
+
+    For a large production deployment you would graduate to Alembic
+    migrations; `create_all` is intentionally idempotent and non-destructive.
+    """
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
+    description=(
+        "Lightweight flashcards API: decks, cards, study sessions, "
+        "multiple-choice quizzes and learning analytics. "
+        "JWT auth with bcrypt password hashing."
+    ),
+    lifespan=lifespan,
+)
+
+# Permissive CORS by default — tighten via the CORS_ORIGINS env var in production.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in settings.CORS_ORIGINS.split(",")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health", tags=["Meta"])
+@app.get("/api/health", tags=["Meta"])
+async def health() -> dict:
+    """Liveness probe used by Docker health checks and monitoring."""
+    return {"status": "ok", "app": settings.APP_NAME, "version": settings.APP_VERSION}
