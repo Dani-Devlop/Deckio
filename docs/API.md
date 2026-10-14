@@ -42,6 +42,23 @@ Errors: `401 Incorrect email or password` (same message for unknown emails — n
 Response `200`: the `user` object. Use after page reloads to restore a stored token.
 Errors: `401` missing/expired/invalid token.
 
+### `PUT /auth/password` — change the account password
+
+Request:
+```json
+{ "current_password": "supersecret123", "new_password": "evenbetter456" }
+```
+
+Response `204 No Content`. Existing JWTs stay valid — only future logins need the new password.
+Errors: `403` current password incorrect · `422` new password < 8 chars or identical to the current one.
+
+### `POST /auth/account/delete` — permanently delete the account
+
+Request: `{ "password": "supersecret123" }` (re-verification).
+Response `204 No Content`. The user row is deleted — decks, cards, sessions and
+reviews all cascade at the DB level. Issued tokens become unusable immediately.
+Errors: `403` password incorrect.
+
 ---
 
 ## Decks
@@ -55,7 +72,7 @@ Response `200`:
     "id": 1, "title": "Spanish Basics", "description": "Everyday words",
     "color": "#10b981", "icon": "🇪🇸", "created_at": "2025-01-01T12:00:00Z",
     "card_count": 11, "reviews_count": 42, "accuracy": 83.3,
-    "last_studied_at": "2025-01-07T09:30:00Z"
+    "last_studied_at": "2025-01-07T09:30:00Z", "due_count": 4
   }
 ]
 ```
@@ -74,6 +91,15 @@ Response `201 Created` → `Deck` (as above, zero stats).
 - `DELETE` removes the deck **and cascades** to its cards, sessions and reviews → `204 No Content`
 - Errors: `404` (deck not found **or not owned by you** — ownership violations are indistinguishable by design)
 
+### `POST /decks/{id}/duplicate` — duplicate a deck → `201`
+
+Copies the deck (title becomes `"<title> (copy)"`, color/icon/description carried over)
+**with all of its cards**. Copied cards start as brand-new (SRS state zeroed, `due_at = NULL`
+→ due immediately), so the copy is fully studiable right away; review history does not carry over.
+
+Response `201`: the new `Deck` object (same shape as the list endpoint, `card_count` and
+`due_count` already populated).
+
 ---
 
 ## Cards
@@ -81,8 +107,12 @@ Response `201 Created` → `Deck` (as above, zero stats).
 ### `GET /decks/{deck_id}/cards` — list cards (creation order) → `200` `[Card]`
 
 ```json
-{ "id": 5, "deck_id": 1, "front": "hola", "back": "hello", "created_at": "..." }
+{ "id": 5, "deck_id": 1, "front": "hola", "back": "hello", "created_at": "...",
+  "ease": 2.5, "interval_days": 0, "reps": 0, "lapses": 0, "due_at": null }
 ```
+
+The SM-2 scheduling fields are read-only surfaces for the UI: `due_at: null` means a new
+card (due immediately); otherwise the client renders `due` / `in Nd` chips from it.
 
 ### `POST /decks/{deck_id}/cards` — add a card
 
@@ -217,6 +247,10 @@ keeps the selected answer for the result screen.
 
 ### `GET /stats/overview` → `200`
 
+Optional query: `?days=91` — length of the activity window (default `7`, min `7`, max `366`).
+The web client requests `?days=182` for its 26-week heatmap and slices the last 7 entries
+for the weekly bar chart.
+
 ```json
 {
   "total_decks": 3, "total_cards": 87, "total_sessions": 14,
@@ -229,7 +263,7 @@ keeps the selected answer for the result screen.
 - `streak_days` — consecutive days with reviews ending today (yesterday still counts as grace)
 - `mastered_cards` — cards with ≥ 3 reviews and ≥ 80% accuracy
 - `due_cards` — cards due right now across all decks (new or overdue per SM-2)
-- `activity` — last 7 days (UTC), missing days zero-filled
+- `activity` — last `days` days (UTC), ascending, missing days zero-filled
 
 ### `GET /stats/decks/{deck_id}` → `200`
 

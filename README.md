@@ -25,12 +25,13 @@ exposed through a clean REST API and bundled with a polished web client.
 ## ✨ Features
 
 - 🔐 **JWT authentication** — register / login, bcrypt-hashed passwords, bearer-token sessions
-- 🗂 **Deck management** — CRUD with color accents, emoji icons, search, sorting, live stats
+- 👤 **Account management** — password change (re-verifies current) and self-service account deletion with cascade cleanup
+- 🗂 **Deck management** — CRUD with color accents, emoji icons, search, sorting, live stats, **one-click duplication** (cards copied, SRS progress reset)
 - 🃏 **Flashcards** — CRUD per deck, plus **CSV bulk import & export** (delimiter auto-detection, per-row error reports, round-trip files)
 - 📖 **Study mode** — server-tracked sessions, random card order, self-grading, progress resume
 - ✨ **Spaced repetition (SM-2)** — *Smart review* sessions cover only due cards; correct answers grow the interval (1d → 3d → interval × ease), lapses reschedule in 10 minutes
 - 🧠 **Quiz mode** — auto-generated questions with **4 options** (1 correct + 3 distractors), instant feedback, full result breakdown
-- 📊 **Analytics** — accuracy, review streaks, 7-day activity, mastered cards, per-deck stats, **weak-card detection**
+- 📊 **Analytics** — accuracy, review streaks, **26-week review heatmap**, 7-day activity, mastered cards, per-deck stats, **weak-card detection**
 - 🖥 **Web app included** — responsive, dark-mode ready client that speaks to the API out of the box
 - 🐳 **One-command deployment** — `docker compose up --build`
 
@@ -127,9 +128,12 @@ Full reference with examples: **[docs/API.md](docs/API.md)** · Interactive: **`
 | `POST` | `/auth/register` | Create account → JWT + user |
 | `POST` | `/auth/login` | Log in → JWT + user |
 | `GET` | `/auth/me` | Current user (session restore) |
+| `PUT` | `/auth/password` | **Change password** (re-verifies current) |
+| `POST` | `/auth/account/delete` | **Delete account** (password-confirmed, cascades) |
 | `GET` | `/decks` | List decks with card counts & accuracy |
 | `POST` | `/decks` | Create deck |
 | `GET/PUT/DELETE` | `/decks/{id}` | Read / update / delete deck |
+| `POST` | `/decks/{id}/duplicate` | **Duplicate deck** (cards copied, SRS reset) |
 | `GET` | `/decks/{id}/cards` | List cards |
 | `POST` | `/decks/{id}/cards` | Add card |
 | `GET` | `/decks/{id}/cards/export` | **Export deck as CSV** (`front,back`) |
@@ -141,7 +145,7 @@ Full reference with examples: **[docs/API.md](docs/API.md)** · Interactive: **`
 | `POST` | `/decks/{id}/quiz/start` | Generate questions (1 correct + 3 distractors, `?limit=`) |
 | `POST` | `/quiz/answer` | Submit an answer (validated server-side) |
 | `GET` | `/quiz/{session_id}/result` | Score, duration, per-question breakdown |
-| `GET` | `/stats/overview` | Totals, accuracy, streak, 7-day activity, mastered cards |
+| `GET` | `/stats/overview` | Totals, accuracy, streak, activity window (`?days=`, 7–366), mastered cards |
 | `GET` | `/stats/decks/{id}` | Per-deck stats + recent sessions |
 | `GET` | `/stats/weak-cards` | Cards with the lowest accuracy |
 
