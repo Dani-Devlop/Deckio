@@ -9,12 +9,15 @@ Accepted formats (delimiter auto-detected: comma, semicolon or tab):
     hola,hello,vocabulary,think "oh-la"   ← optional 4th column = hint
     hola,hello,,,"https://...jpg"         ← optional 5th column = image URL
 
-An optional header row is tolerated; it is detected when the first cells are
-column names (front/back/question/answer/tags/hint/image/...). The optional
-third column holds tags separated by `|` (e.g. `verbs|beginner`); the optional
-fourth column is a hint shown on the question side while studying; the fifth
-is an image URL rendered above the text. Exact duplicate rows within a file
-are silently de-duplicated; invalid rows are reported with row numbers.
+An optional header row is tolerated. When a header is present, columns are
+mapped BY NAME (in any order): front/question/term/word/prompt, back/answer/
+definition/translation/response, plus the optional tags, hint and
+image/image_url/picture columns. Without a header, parsing stays positional
+(3rd column = tags, 4th = hint, 5th = image URL). The third column holds tags
+separated by `|` (e.g. `verbs|beginner`); the fourth is a hint shown on the
+question side while studying; the fifth is an image URL rendered above the
+text. Exact duplicate rows within a file are silently de-duplicated; invalid
+rows are reported with row numbers.
 """
 
 import csv
@@ -28,23 +31,13 @@ MAX_ROWS_PER_IMPORT = 1000
 
 CsvCard = tuple[str, str, list[str], str | None, str | None]  # (front, back, tags, hint, image_url)
 
-_HEADER_TOKENS = {
-    "front",
-    "back",
-    "question",
-    "answer",
-    "term",
-    "definition",
-    "word",
-    "translation",
-    "prompt",
-    "response",
-    "tags",  # optional 3rd column
-    "hint",  # optional 4th column
-    "image",  # optional 5th column
-    "image_url",
-    "picture",
-}
+_FRONT_HEADERS = {"front", "question", "term", "word", "prompt"}
+_BACK_HEADERS = {"back", "answer", "definition", "translation", "response"}
+_TAGS_HEADERS = {"tags"}
+_HINT_HEADERS = {"hint"}
+_IMAGE_HEADERS = {"image", "image_url", "picture"}
+
+_HEADER_TOKENS = _FRONT_HEADERS | _BACK_HEADERS | _TAGS_HEADERS | _HINT_HEADERS | _IMAGE_HEADERS
 
 
 def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
@@ -75,14 +68,35 @@ def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
         if any(cell.strip() for cell in row)  # skip blank lines
     ]
 
-    for i, row in enumerate(rows, start=1):
-        if i == 1 and _looks_like_header(row):
-            continue  # optional header row
+    # Optional header row → semantic column mapping; otherwise positional.
+    cmap: dict[str, int] | None = None
+    first_row_no = 1
+    if rows and _looks_like_header(rows[0]):
+        cmap = _column_map(rows[0])
+        rows = rows[1:]
+        first_row_no = 2  # user-facing numbering keeps the header as row 1
+
+    for i, row in enumerate(rows, start=first_row_no):
         if len(row) < 2:
             errors.append(f"Row {i}: expected 2 columns (front, back), got {len(row)}.")
             continue
 
-        front, back = row[0].strip(), row[1].strip()
+        def col(key: str) -> str:
+            """Header-mapped cell ("" when the column is absent from this row)."""
+            idx = cmap.get(key) if cmap else None
+            return row[idx].strip() if idx is not None and len(row) > idx else ""
+
+        if cmap is not None:
+            front, back = col("front"), col("back")
+            tags_src = col("tags")
+            hint_src = col("hint")
+            image_src = col("image")
+        else:
+            front, back = row[0].strip(), row[1].strip()
+            tags_src = row[2] if len(row) >= 3 else ""
+            hint_src = row[3] if len(row) >= 4 else ""
+            image_src = row[4] if len(row) >= 5 else ""
+
         if not front or not back:
             errors.append(f"Row {i}: front and back must not be empty.")
             continue
@@ -93,30 +107,25 @@ def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
             errors.append(f"Row {i}: back exceeds {MAX_BACK_LEN} characters.")
             continue
 
-        # Optional third column: tags separated by `|` inside the cell.
-        tags: list[str] = []
-        if len(row) >= 3:
-            tags = [t.strip() for t in row[2].split("|") if t.strip()]
+        # Optional tags: separated by `|` inside the cell.
+        tags = [t.strip() for t in tags_src.split("|") if t.strip()]
 
-        # Optional fourth column: hint (trimmed, capped, empty → None).
-        hint: str | None = None
-        if len(row) >= 4:
-            hint = row[3].strip()[:MAX_HINT_LEN] or None
+        # Optional hint (trimmed, capped, empty → None).
+        hint = hint_src.strip()[:MAX_HINT_LEN] or None
 
-        # Optional fifth column: image URL (light scheme check, empty → None).
+        # Optional image URL (light scheme check, empty → None).
         image_url: str | None = None
-        if len(row) >= 5:
-            raw_url = row[4].strip()
-            if raw_url:
-                if len(raw_url) > MAX_IMAGE_URL_LEN:
-                    errors.append(f"Row {i}: image URL exceeds {MAX_IMAGE_URL_LEN} characters.")
-                    continue
-                if not raw_url.lower().startswith(("http://", "https://", "data:image/", "//", "/")):
-                    errors.append(
-                        f"Row {i}: image URL must start with http://, https://, data:image/ or / "
-                    )
-                    continue
-                image_url = raw_url
+        raw_url = image_src.strip()
+        if raw_url:
+            if len(raw_url) > MAX_IMAGE_URL_LEN:
+                errors.append(f"Row {i}: image URL exceeds {MAX_IMAGE_URL_LEN} characters.")
+                continue
+            if not raw_url.lower().startswith(("http://", "https://", "data:image/", "//", "/")):
+                errors.append(
+                    f"Row {i}: image URL must start with http://, https://, data:image/ or / "
+                )
+                continue
+            image_url = raw_url
 
         pair = (front, back)
         if pair in seen:
@@ -131,3 +140,25 @@ def _looks_like_header(row: list[str]) -> bool:
     """True when the first row's first two cells are recognized column names."""
     cells = [cell.strip().lower() for cell in row[:2]]
     return len(cells) == 2 and all(c in _HEADER_TOKENS for c in cells)
+
+
+def _column_map(header_row: list[str]) -> dict[str, int]:
+    """Map semantic column names to indices from a header row (first match wins)."""
+    mapping: dict[str, int] = {}
+    for idx, cell in enumerate(header_row):
+        name = cell.strip().lower()
+        if name in _FRONT_HEADERS and "front" not in mapping:
+            mapping["front"] = idx
+        elif name in _BACK_HEADERS and "back" not in mapping:
+            mapping["back"] = idx
+        elif name in _TAGS_HEADERS and "tags" not in mapping:
+            mapping["tags"] = idx
+        elif name in _HINT_HEADERS and "hint" not in mapping:
+            mapping["hint"] = idx
+        elif name in _IMAGE_HEADERS and "image" not in mapping:
+            mapping["image"] = idx
+    # Front/back are mandatory — fall back to positional parsing when the
+    # header doesn't name them (e.g. a bare `tags,hint` first row).
+    mapping.setdefault("front", 0)
+    mapping.setdefault("back", 1)
+    return mapping
