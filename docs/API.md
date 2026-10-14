@@ -83,7 +83,8 @@ Response `200`:
     "id": 1, "title": "Spanish Basics", "description": "Everyday words",
     "color": "#10b981", "icon": "🇪🇸", "created_at": "2025-01-01T12:00:00Z",
     "card_count": 11, "reviews_count": 42, "accuracy": 83.3,
-    "last_studied_at": "2025-01-07T09:30:00Z", "due_count": 4
+    "last_studied_at": "2025-01-07T09:30:00Z", "due_count": 4,
+    "new_per_day": 20, "max_reviews": 100
   }
 ]
 ```
@@ -215,8 +216,9 @@ SRS progress and review history are intentionally **not** included.
 
 Body: a previously exported bundle (min 1 card, max 1000). Creates a new deck owned by
 the caller with every card inserted as **new** (`due_at = null` → due immediately).
-Response: the new `DeckOut` (with the real `due_count`). Errors: `422` validation
-(empty cards array, bad color/icon, …).
+Optional `new_per_day` / `max_reviews` fields carry the deck's smart-review presets
+(omitted → defaults 20/100). Response: the new `DeckOut` (with the real `due_count`).
+Errors: `422` validation (empty cards array, bad color/icon, …).
 
 ---
 
@@ -271,14 +273,26 @@ Optional `?limit=` (1–25, default 8 per section).
 ### `POST /decks/{deck_id}/study/start?srs=true` → `201`
 
 ```json
-{ "session_id": 10, "deck_id": 1, "mode": "study", "srs": true, "total_cards": 8 }
+{ "session_id": 10, "deck_id": 1, "mode": "study", "srs": true, "total_cards": 8,
+  "plan_reviews": 5, "plan_new": 3, "note": "Daily limit — 20 new cards/day" }
 ```
 
 - **Regular session** (`srs=false`, default): covers the whole deck in random order.
-- **Smart review** (`srs=true`): covers only cards that are *due* — new cards
-  (never reviewed) or overdue per the SM-2 schedule — oldest due first.
-  `total_cards` is the fixed due count at start.
-  `400 "Nothing due right now — you're all caught up! 🎉"` when the deck has no due cards.
+  `plan_reviews` / `plan_new` are `0` and `note` is `null`.
+- **Smart review** (`srs=true`): an ordered plan of due cards — **reviews first**
+  (most overdue wins, `reps > 0`), then **new cards** (`reps == 0`), shaped by the
+  deck's presets:
+  - `new_per_day` (0–100, default 20): daily budget of brand-new cards. Cards whose
+    *first* review happened today (UTC, any study mode) burn the budget.
+  - `max_reviews` (5–500, default 100): hard cap on the total session size.
+  - `note` explains which limit trimmed the plan (`null` when nothing was trimmed).
+  - The exact card-id plan is **stored on the session** (`plan_json`) and served in
+    order by `study/next`, so limits stay deterministic across reloads. Once the plan
+    is exhausted the session finishes — cards that come due mid-session wait for the
+    next session.
+  - `400 "Nothing due right now — you're all caught up! 🎉"` when the deck has no due
+    cards; `400 "Daily smart-review limit reached — raise the limits in the deck
+    settings ⚙️"` when due cards exist but the budget is spent.
 Errors: `400 This deck has no cards yet`.
 
 ### `GET /decks/{deck_id}/study/next?session_id=10` → `200`

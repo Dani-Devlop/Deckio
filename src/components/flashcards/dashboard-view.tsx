@@ -69,6 +69,8 @@ export function DeckFormDialog({
   const [description, setDescription] = useState("");
   const [color, setColor] = useState(DECK_COLORS[0]);
   const [icon, setIcon] = useState(DECK_ICONS[0]);
+  const [newPerDay, setNewPerDay] = useState("20");
+  const [maxReviews, setMaxReviews] = useState("100");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,6 +81,8 @@ export function DeckFormDialog({
       setDescription(deck?.description ?? "");
       setColor(deck?.color ?? DECK_COLORS[0]);
       setIcon(deck?.icon ?? DECK_ICONS[0]);
+      setNewPerDay(String(deck?.new_per_day ?? 20));
+      setMaxReviews(String(deck?.max_reviews ?? 100));
       setError(null);
     }
   }, [deck, open]);
@@ -88,6 +92,16 @@ export function DeckFormDialog({
       setError("Give your deck a title.");
       return;
     }
+    const npd = Number(newPerDay);
+    const mx = Number(maxReviews);
+    if (!Number.isInteger(npd) || npd < 0 || npd > 100) {
+      setError("New cards per day must be a whole number between 0 and 100.");
+      return;
+    }
+    if (!Number.isInteger(mx) || mx < 5 || mx > 500) {
+      setError("The session cap must be a whole number between 5 and 500.");
+      return;
+    }
     setBusy(true);
     try {
       const payload = {
@@ -95,6 +109,8 @@ export function DeckFormDialog({
         description: description.trim() || null,
         color,
         icon,
+        new_per_day: npd,
+        max_reviews: mx,
       };
       if (deck) {
         await api.decks.update(deck.id, payload);
@@ -185,6 +201,53 @@ export function DeckFormDialog({
               ))}
             </div>
           </div>
+
+          {/* ---- Smart-review limits (SRS presets) ---- */}
+          <fieldset className="rounded-xl border bg-muted/30 p-3.5">
+            <legend className="flex items-center gap-1.5 px-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Sparkles className="h-3.5 w-3.5 text-amber-500" /> Smart review limits
+            </legend>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="deck-new-per-day" className="text-xs font-normal">
+                  New cards / day
+                </Label>
+                <Input
+                  id="deck-new-per-day"
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={newPerDay}
+                  onChange={(e) => setNewPerDay(e.target.value)}
+                  aria-describedby="deck-new-per-day-hint"
+                />
+                <p id="deck-new-per-day-hint" className="text-[11px] leading-tight text-muted-foreground">
+                  0–100 · 0 = review-only
+                </p>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="deck-max-reviews" className="text-xs font-normal">
+                  Session cap
+                </Label>
+                <Input
+                  id="deck-max-reviews"
+                  type="number"
+                  inputMode="numeric"
+                  min={5}
+                  max={500}
+                  step={1}
+                  value={maxReviews}
+                  onChange={(e) => setMaxReviews(e.target.value)}
+                  aria-describedby="deck-max-reviews-hint"
+                />
+                <p id="deck-max-reviews-hint" className="text-[11px] leading-tight text-muted-foreground">
+                  5–500 cards per session
+                </p>
+              </div>
+            </div>
+          </fieldset>
 
           {error && <p className="text-sm text-rose-600">{error}</p>}
         </div>

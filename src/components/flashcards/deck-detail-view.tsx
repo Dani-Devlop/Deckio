@@ -24,6 +24,7 @@ import {
   Trash2,
   Upload,
   X,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -695,6 +696,16 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                 <Sparkles className="h-3.5 w-3.5" /> {deck.due_count} due for review
               </Badge>
             )}
+            <button
+              type="button"
+              onClick={() => setEditDeckOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-amber-400/60 bg-amber-50/60 px-2.5 py-1.5 text-xs font-medium text-amber-800 transition hover:border-amber-500 hover:bg-amber-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+              title="Smart review limits — click to edit"
+              aria-label={`Smart review limits: ${deck.new_per_day} new cards per day, session cap ${deck.max_reviews}. Edit`}
+            >
+              <Zap className="h-3.5 w-3.5" />
+              {deck.new_per_day}/day · cap {deck.max_reviews}
+            </button>
             {deck.share_token && (
               <Badge
                 variant="secondary"

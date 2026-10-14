@@ -21,6 +21,7 @@ export function StudyView({ deckId }: { deckId: number }) {
   const initialSrs = useAppStore((s) => s.studySrs);
   const [session, setSession] = useState<StudyStart | null>(null);
   const [isSrs, setIsSrs] = useState(initialSrs);
+  const [planNote, setPlanNote] = useState<string | null>(null); // limit reason from start
   const [current, setCurrent] = useState<StudyNext | null>(null);
   const [flipped, setFlipped] = useState(false);
   const [results, setResults] = useState<ReviewResult[]>([]);
@@ -40,6 +41,7 @@ export function StudyView({ deckId }: { deckId: number }) {
         if (cancelled) return;
         setSession(start);
         setIsSrs(start.srs);
+        setPlanNote(start.note ?? null);
         const next = await api.study.next(deckId, start.session_id);
         if (cancelled) return;
         setCurrent(next);
@@ -137,18 +139,22 @@ export function StudyView({ deckId }: { deckId: number }) {
         </p>
 
         <div className="mt-6 flex gap-3">
-          <div className="rounded-xl border bg-card px-6 py-4">
-            <p className="text-2xl font-bold text-emerald-600">{correct}</p>
-            <p className="text-xs text-muted-foreground">Got it</p>
-          </div>
-          <div className="rounded-xl border bg-card px-6 py-4">
-            <p className="text-2xl font-bold text-rose-500">{results.length - correct}</p>
-            <p className="text-xs text-muted-foreground">Again</p>
-          </div>
-          <div className="rounded-xl border bg-card px-6 py-4">
-            <p className="text-2xl font-bold">{acc}%</p>
-            <p className="text-xs text-muted-foreground">Accuracy</p>
-          </div>
+          {[
+            { value: correct, label: "Got it", cls: "text-emerald-600" },
+            { value: results.length - correct, label: "Again", cls: "text-rose-500" },
+            { value: `${acc}%`, label: "Accuracy", cls: "" },
+          ].map((tile, i) => (
+            <motion.div
+              key={tile.label}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 + i * 0.08, duration: 0.3, ease: "easeOut" }}
+              className="rounded-xl border bg-card px-6 py-4"
+            >
+              <p className={`text-2xl font-bold ${tile.cls}`}>{tile.value}</p>
+              <p className="text-xs text-muted-foreground">{tile.label}</p>
+            </motion.div>
+          ))}
         </div>
 
         <div className="mt-8 flex flex-wrap justify-center gap-2">
@@ -165,6 +171,7 @@ export function StudyView({ deckId }: { deckId: number }) {
                   setCurrent(n);
                   setFlipped(false);
                   setHintShown(false);
+                  setPlanNote(null);
                   setPhase("playing");
                 })
                 .catch(() => {
@@ -205,9 +212,21 @@ export function StudyView({ deckId }: { deckId: number }) {
         </span>
       </div>
       {isSrs && (
-        <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-amber-600">
-          <Sparkles className="h-3.5 w-3.5" /> Smart review — cards scheduled by spaced repetition
-        </p>
+        <motion.p
+          initial={{ opacity: 0, y: -4 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs font-medium text-amber-600"
+        >
+          <Sparkles className="h-3.5 w-3.5" /> Smart review
+          {session && (session.plan_reviews > 0 || session.plan_new > 0) && (
+            <span className="font-normal text-muted-foreground">
+              — {session.plan_reviews > 0 && `${session.plan_reviews} review${session.plan_reviews === 1 ? "" : "s"}`}
+              {session.plan_reviews > 0 && session.plan_new > 0 && " + "}
+              {session.plan_new > 0 && `${session.plan_new} new`}
+            </span>
+          )}
+          {planNote && <span className="font-normal text-amber-500/90">· {planNote}</span>}
+        </motion.p>
       )}
 
       {/* ---------- Flashcard ---------- */}

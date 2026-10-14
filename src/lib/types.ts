@@ -29,6 +29,9 @@ export interface Deck {
   accuracy: number | null;
   last_studied_at: string | null;
   due_count: number;
+  // Smart-review presets (per-deck):
+  new_per_day: number;
+  max_reviews: number;
   share_token: string | null; // public read-only link token (null = private)
 }
 
@@ -37,6 +40,8 @@ export interface DeckInput {
   description?: string | null;
   color?: string;
   icon?: string;
+  new_per_day?: number; // new cards a smart review may introduce per day
+  max_reviews?: number; // hard cap on smart-review session size
 }
 
 // ----------------------------- Cards -----------------------------
@@ -109,6 +114,8 @@ export interface DeckBundle {
   description: string | null;
   color: string;
   icon: string;
+  new_per_day?: number;
+  max_reviews?: number;
   card_count: number;
   cards: { front: string; back: string; tags: string[]; hint?: string | null; image_url?: string | null }[];
 }
@@ -144,6 +151,10 @@ export interface StudyStart {
   mode: string;
   srs: boolean;
   total_cards: number;
+  // Smart-review plan shape (0/0 for regular sessions):
+  plan_reviews: number;
+  plan_new: number;
+  note: string | null; // why the plan was trimmed (daily limit / session cap)
 }
 
 export interface StudyNext {

@@ -32,7 +32,8 @@ exposed through a clean REST API and bundled with a polished web client.
 - 🔗 **Deck bundles** — export any deck as a portable JSON bundle (cards + tags + hints + images) and import it on any account — deck sharing made easy
 - 🌐 **Public share links** — one-click read-only deck preview (`/?share=<token>`) that works without an account; rotate or revoke anytime, with a built-in **Import this deck** CTA
 - 📖 **Study mode** — server-tracked sessions, random card order, self-grading, progress resume
-- ✨ **Spaced repetition (SM-2)** — *Smart review* sessions cover only due cards; correct answers grow the interval (1d → 3d → interval × ease), lapses reschedule in 10 minutes
+- ✨ **Spaced repetition (SM-2)** — *Smart review* sessions cover only due cards; correct answers grow the interval (1d → 3d → interval × ease), lapses reschedule in 10 minutes. **Per-deck presets**: `new cards/day` daily budget and a session-size cap, with the exact ordered plan stored on the session
+- 🔔 **Review reminders** — opt-in browser notifications while cards are due (60 s poll + focus refresh, one notification per due-count per day)
 - 🧠 **Quiz mode** — auto-generated questions with **4 options** (1 correct + 3 distractors), pickable quiz length (5 / 10 / 15 / all), instant feedback, full result breakdown
 - 📊 **Analytics** — accuracy, review streaks, **26-week review heatmap**, 7-day activity, mastered cards, per-deck stats, **weak-card detection**, recent-session history, **daily goal ring** with celebration
 - 🖥 **Web app included** — responsive, dark-mode ready client that speaks to the API out of the box

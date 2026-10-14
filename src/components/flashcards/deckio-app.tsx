@@ -25,6 +25,7 @@ import { DashboardView } from "./dashboard-view";
 import { DeckDetailView } from "./deck-detail-view";
 import { PublicDeckView } from "./public-deck-view";
 import { QuizView } from "./quiz-view";
+import { ReminderBell } from "./reminder-bell";
 import { StatsView } from "./stats-view";
 import { StudyView } from "./study-view";
 
@@ -91,6 +92,7 @@ function SiteHeader() {
             <BarChart3 className="h-4 w-4" />
             <span className="hidden sm:inline">Stats</span>
           </Button>
+          <ReminderBell />
           <ThemeToggle />
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
