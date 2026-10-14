@@ -8,12 +8,12 @@ enforce ownership). Aggregations happen in SQL; only small post-processing
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..deps import get_current_user, get_owned_deck
-from ..models import Card, CardReview, Deck, StudySession, User
+from ..models import Card, CardReview, Deck, StudySession, User, utcnow
 from ..schemas import (
     ActivityDay,
     DeckSessionOut,
@@ -62,6 +62,14 @@ async def stats_overview(
     )
     total_sessions = await db.scalar(
         select(func.count()).select_from(StudySession).where(StudySession.user_id == user.id)
+    )
+
+    # Cards due right now across all decks (SM-2: new or overdue).
+    due_cards = await db.scalar(
+        select(func.count())
+        .select_from(Card)
+        .join(Deck, Deck.id == Card.deck_id)
+        .where(Deck.user_id == user.id, or_(Card.due_at.is_(None), Card.due_at <= utcnow()))
     )
 
     # All reviews of this user, with timestamps for the activity chart / streak.
@@ -121,6 +129,7 @@ async def stats_overview(
         accuracy=round(correct_reviews / total_reviews * 100, 1) if total_reviews else None,
         streak_days=_streak_days(set(counts.keys())),
         mastered_cards=mastered,
+        due_cards=int(due_cards or 0),
         activity=activity,
     )
 

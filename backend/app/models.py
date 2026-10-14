@@ -18,7 +18,7 @@ Notes on the base spec:
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -77,6 +77,14 @@ class Card(Base):
     back: Mapped[str] = mapped_column(Text)  # answer side
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+    # --- Spaced repetition state (simplified SM-2, updated on study reviews) ---
+    # due_at == NULL means "new card" → due immediately.
+    ease: Mapped[float] = mapped_column(Float, default=2.5)  # ease factor (1.3 – 3.0)
+    interval_days: Mapped[int] = mapped_column(Integer, default=0)  # current review interval
+    reps: Mapped[int] = mapped_column(Integer, default=0)  # consecutive correct reps
+    lapses: Mapped[int] = mapped_column(Integer, default=0)  # total times forgotten
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
     deck: Mapped["Deck"] = relationship(back_populates="cards")
     reviews: Mapped[list["CardReview"]] = relationship(
         back_populates="card", cascade="all, delete-orphan"
@@ -91,9 +99,12 @@ class StudySession(Base):
     deck_id: Mapped[int] = mapped_column(ForeignKey("decks.id", ondelete="CASCADE"), index=True)
     # "study" = self-paced flip cards, "quiz" = multiple-choice (spec extension).
     mode: Mapped[str] = mapped_column(String(10), default="study")
+    # True → smart spaced-repetition session covering only DUE cards.
+    srs: Mapped[bool] = mapped_column(Boolean, default=False)
     # For quiz sessions: how many questions were generated at start (spec
     # extension). Lets the session close exactly when its planned questions
     # are answered, even if the deck was capped by `limit` or grows later.
+    # For SRS study sessions it stores the number of due cards.
     total_planned: Mapped[int | None] = mapped_column(default=None)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

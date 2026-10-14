@@ -1,6 +1,11 @@
-"""Card CRUD endpoints + CSV bulk import."""
+"""Card CRUD endpoints + CSV bulk import + CSV export."""
+
+import csv
+import io
+import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi.responses import PlainTextResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,6 +84,41 @@ async def delete_card(
     await db.delete(card)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ------------------------- CSV export -------------------------
+
+
+@router.get(
+    "/decks/{deck_id}/cards/export",
+    response_class=PlainTextResponse,
+    summary="Export a deck's cards as CSV (front,back)",
+)
+async def export_cards_csv(
+    deck: Deck = Depends(get_owned_deck),
+    db: AsyncSession = Depends(get_db),
+) -> PlainTextResponse:
+    """Round-trip companion to the bulk import: the exported file can be
+    re-imported into any other deck (or into Anki-style tools) as-is."""
+    cards = (
+        await db.scalars(
+            select(Card).where(Card.deck_id == deck.id).order_by(Card.created_at, Card.id)
+        )
+    ).all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["front", "back"])
+    for card in cards:
+        writer.writerow([card.front, card.back])
+
+    # Filesystem-safe filename derived from the deck title.
+    slug = re.sub(r"[^a-zA-Z0-9-_]+", "-", deck.title).strip("-").lower() or "deck"
+    return PlainTextResponse(
+        buf.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{slug}-cards.csv"'},
+    )
 
 
 # ------------------------- CSV bulk import -------------------------

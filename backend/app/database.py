@@ -34,3 +34,42 @@ async def get_db() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency: one database session per request, always closed."""
     async with AsyncSessionLocal() as session:
         yield session
+
+
+async def run_startup_migrations() -> None:
+    """Lightweight, **idempotent** column migrations for the SQLite dev DB.
+
+    `create_all()` creates missing tables but never alters existing ones.
+    These targeted ALTERs keep an existing local dev database in sync with
+    model changes (e.g. the SM-2 spaced-repetition columns added to `cards`).
+    Docker/PostgreSQL deployments always start from a fresh volume, where
+    `create_all()` already produces the full schema.
+    """
+    if not settings.DATABASE_URL.startswith("sqlite"):
+        return
+
+    def _migrate(sync_conn) -> None:
+        from sqlalchemy import inspect
+
+        insp = inspect(sync_conn)
+
+        card_cols = {c["name"] for c in insp.get_columns("cards")}
+        card_additions = {
+            "ease": "ALTER TABLE cards ADD COLUMN ease FLOAT NOT NULL DEFAULT 2.5",
+            "interval_days": "ALTER TABLE cards ADD COLUMN interval_days INTEGER NOT NULL DEFAULT 0",
+            "reps": "ALTER TABLE cards ADD COLUMN reps INTEGER NOT NULL DEFAULT 0",
+            "lapses": "ALTER TABLE cards ADD COLUMN lapses INTEGER NOT NULL DEFAULT 0",
+            "due_at": "ALTER TABLE cards ADD COLUMN due_at DATETIME",
+        }
+        for name, ddl in card_additions.items():
+            if name not in card_cols:
+                sync_conn.exec_driver_sql(ddl)
+
+        session_cols = {c["name"] for c in insp.get_columns("study_sessions")}
+        if "srs" not in session_cols:
+            sync_conn.exec_driver_sql(
+                "ALTER TABLE study_sessions ADD COLUMN srs BOOLEAN NOT NULL DEFAULT 0"
+            )
+
+    async with engine.begin() as conn:
+        await conn.run_sync(_migrate)

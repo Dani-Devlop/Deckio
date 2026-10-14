@@ -79,6 +79,7 @@ class DeckOut(BaseModel):
     reviews_count: int = 0
     accuracy: float | None = None  # percentage 0–100
     last_studied_at: datetime | None = None
+    due_count: int = 0  # cards due for review (SM-2 spaced repetition)
 
 
 # ============================== Cards ==============================
@@ -123,6 +124,7 @@ class StudyStartOut(BaseModel):
     session_id: int
     deck_id: int
     mode: str = "study"
+    srs: bool = False
     total_cards: int
 
 
@@ -221,6 +223,7 @@ class StatsOverview(BaseModel):
     accuracy: float | None
     streak_days: int
     mastered_cards: int
+    due_cards: int
     activity: list[ActivityDay]  # last 7 days, ascending
 
 

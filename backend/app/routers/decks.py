@@ -6,12 +6,12 @@ dashboard stays fast as the library grows.
 """
 
 from fastapi import APIRouter, Depends, Response, status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..deps import get_current_user, get_owned_deck
-from ..models import Card, CardReview, Deck, StudySession, User
+from ..models import Card, CardReview, Deck, StudySession, User, utcnow
 from ..schemas import DeckCreate, DeckOut, DeckUpdate
 
 router = APIRouter(prefix="/decks", tags=["Decks"])
@@ -32,11 +32,17 @@ def _to_deck_out(deck: Deck, stats: dict) -> DeckOut:
         reviews_count=reviews,
         accuracy=round(correct / reviews * 100, 1) if reviews else None,
         last_studied_at=stats.get("last_studied_at"),
+        due_count=stats.get("due", 0),
     )
 
 
 async def _collect_stats(user: User, db: AsyncSession, deck_ids: set[int]) -> dict[int, dict]:
-    """Aggregate card counts, review counts, accuracy and last-studied per deck."""
+    """Aggregate card counts, review counts, accuracy and last-studied per deck.
+
+    Aggregates are user-scoped (one grouped query each), so rows may arrive for
+    decks outside the requested `deck_ids` — `setdefault` tolerates that and
+    callers simply ignore the extra entries.
+    """
     stats: dict[int, dict] = {deck_id: {} for deck_id in deck_ids}
     if not deck_ids:
         return stats
@@ -49,7 +55,7 @@ async def _collect_stats(user: User, db: AsyncSession, deck_ids: set[int]) -> di
         .group_by(Card.deck_id)
     )
     for deck_id, count in card_rows.all():
-        stats[deck_id]["card_count"] = count
+        stats.setdefault(deck_id, {})["card_count"] = count
 
     # 2) Review counts + correct answers per deck (reviews → sessions → decks).
     review_rows = await db.execute(
@@ -63,7 +69,7 @@ async def _collect_stats(user: User, db: AsyncSession, deck_ids: set[int]) -> di
         .group_by(StudySession.deck_id)
     )
     for deck_id, total, correct in review_rows.all():
-        stats[deck_id]["reviews"] = total
+        stats.setdefault(deck_id, {})["reviews"] = total
         stats[deck_id]["correct"] = int(correct or 0)
 
     # 3) Most recent study session per deck.
@@ -73,7 +79,18 @@ async def _collect_stats(user: User, db: AsyncSession, deck_ids: set[int]) -> di
         .group_by(StudySession.deck_id)
     )
     for deck_id, last in last_rows.all():
-        stats[deck_id]["last_studied_at"] = last
+        stats.setdefault(deck_id, {})["last_studied_at"] = last
+
+    # 4) Cards due right now per deck (SM-2: new cards or overdue).
+    now = utcnow()
+    due_rows = await db.execute(
+        select(Card.deck_id, func.count())
+        .join(Deck, Deck.id == Card.deck_id)
+        .where(Deck.user_id == user.id, or_(Card.due_at.is_(None), Card.due_at <= now))
+        .group_by(Card.deck_id)
+    )
+    for deck_id, due in due_rows.all():
+        stats.setdefault(deck_id, {})["due"] = due
 
     return stats
 

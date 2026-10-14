@@ -14,19 +14,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .database import Base, engine
+from .database import Base, engine, run_startup_migrations
 from .routers import auth, cards, decks, quiz, stats, study
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Create database tables on startup (safe for SQLite & PostgreSQL).
+    """Prepare the database on startup.
 
-    For a large production deployment you would graduate to Alembic
-    migrations; `create_all` is intentionally idempotent and non-destructive.
+    1. `create_all` — creates any missing tables (safe & idempotent).
+    2. `run_startup_migrations` — idempotent column ALTERs for existing SQLite
+       dev databases (Postgres deployments start from a fresh volume).
     """
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await run_startup_migrations()
     yield
 
 

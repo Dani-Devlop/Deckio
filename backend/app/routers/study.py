@@ -9,23 +9,33 @@ The server tracks progress by comparing `card_reviews` rows against the
 deck's card list, so sessions survive page reloads and card edits.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..deps import get_current_user, get_owned_deck, load_owned_session
 from ..models import Card, CardReview, Deck, StudySession, User, utcnow
 from ..schemas import ReviewIn, ReviewOut, StudyNextOut, StudyStartOut
+from ..utils.srs import apply_sm2
 
 router = APIRouter(tags=["Study"])
 
 
 async def _session_progress(db: AsyncSession, session: StudySession) -> tuple[int, int]:
-    """Return (reviewed_cards, total_cards) for a session."""
-    total = await db.scalar(
-        select(func.count()).select_from(Card).where(Card.deck_id == session.deck_id)
-    )
+    """Return (reviewed_cards, total_cards) for a session.
+
+    Quiz and SRS sessions have a fixed plan (total_planned); regular study
+    sessions cover the whole deck, so the total is the deck's card count.
+    """
+    total: int | None = session.total_planned
+    if total is None:
+        total = int(
+            await db.scalar(
+                select(func.count()).select_from(Card).where(Card.deck_id == session.deck_id)
+            )
+            or 0
+        )
     reviewed = await db.scalar(
         select(func.count()).select_from(CardReview).where(CardReview.session_id == session.id)
     )
@@ -42,22 +52,46 @@ async def start_study(
     deck: Deck = Depends(get_owned_deck),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    srs: bool = Query(default=False, description="Smart review: only cards due by the SM-2 schedule"),
 ) -> StudyStartOut:
-    total = await db.scalar(
-        select(func.count()).select_from(Card).where(Card.deck_id == deck.id)
-    )
-    if not total:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This deck has no cards yet — add some cards first",
+    if srs:
+        # Spaced-repetition session: only cards that are new (never scheduled)
+        # or overdue right now. The plan size is fixed at start.
+        due_count = await db.scalar(
+            select(func.count()).select_from(Card).where(
+                Card.deck_id == deck.id,
+                or_(Card.due_at.is_(None), Card.due_at <= utcnow()),
+            )
         )
+        if not due_count:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Nothing due right now — you're all caught up! 🎉",
+            )
+        session = StudySession(
+            user_id=user.id,
+            deck_id=deck.id,
+            mode="study",
+            srs=True,
+            total_planned=int(due_count),
+        )
+        total = int(due_count)
+    else:
+        total = await db.scalar(
+            select(func.count()).select_from(Card).where(Card.deck_id == deck.id)
+        )
+        if not total:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This deck has no cards yet — add some cards first",
+            )
+        session = StudySession(user_id=user.id, deck_id=deck.id, mode="study")
 
-    session = StudySession(user_id=user.id, deck_id=deck.id, mode="study")
     db.add(session)
     await db.commit()
     await db.refresh(session)
 
-    return StudyStartOut(session_id=session.id, deck_id=deck.id, total_cards=int(total))
+    return StudyStartOut(session_id=session.id, deck_id=deck.id, srs=session.srs, total_cards=total)
 
 
 @router.get(
@@ -102,21 +136,34 @@ async def study_next(
 
     reviewed, total = await _session_progress(db, session)
 
-    # Next card = a card of this deck that has no review row in this session,
-    # picked at random so every run-through feels fresh.
-    next_card = (
-        await db.scalars(
-            select(Card)
-            .where(
-                Card.deck_id == session.deck_id,
-                ~Card.id.in_(
-                    select(CardReview.card_id).where(CardReview.session_id == session.id)
-                ),
+    # Next card selection:
+    # - SRS session → oldest due card first (deterministic, most overdue wins)
+    # - regular session → any un-reviewed card, random order
+    not_reviewed = ~Card.id.in_(
+        select(CardReview.card_id).where(CardReview.session_id == session.id)
+    )
+    if session.srs:
+        next_card = (
+            await db.scalars(
+                select(Card)
+                .where(
+                    Card.deck_id == session.deck_id,
+                    not_reviewed,
+                    or_(Card.due_at.is_(None), Card.due_at <= utcnow()),
+                )
+                .order_by(Card.due_at.asc().nulls_first())
+                .limit(1)
             )
-            .order_by(func.random())
-            .limit(1)
-        )
-    ).first()
+        ).first()
+    else:
+        next_card = (
+            await db.scalars(
+                select(Card)
+                .where(Card.deck_id == session.deck_id, not_reviewed)
+                .order_by(func.random())
+                .limit(1)
+            )
+        ).first()
 
     finished = next_card is None
     if finished and session.finished_at is None:
@@ -173,6 +220,13 @@ async def submit_review(
                 reviewed_at=utcnow(),
             )
         )
+
+    # Study-mode reviews (regular AND smart/SRS) drive SM-2 scheduling so the
+    # card comes back at the right time. Quiz answers are practice-only and do
+    # not touch the schedule.
+    if session.mode == "study":
+        apply_sm2(card, payload.result == "correct")
+
     await db.commit()
 
     reviewed, total = await _session_progress(db, session)
