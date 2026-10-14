@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   BookOpen,
@@ -8,6 +8,7 @@ import {
   Clock,
   CopyPlus,
   Download,
+  FileDown,
   FileUp,
   Loader2,
   MoreVertical,
@@ -15,11 +16,15 @@ import {
   Play,
   Plus,
   Sparkles,
+  Tag,
   Target,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
+
+import { motion } from "framer-motion";
 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -39,9 +44,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api } from "@/lib/api";
 import { accuracyColor, dueLabel, formatDate, timeAgo } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
-import type { BulkImportResult, Card, Deck } from "@/lib/types";
+import type { BulkImportResult, Card, Deck, DeckBundle } from "@/lib/types";
 
 import { DeckFormDialog } from "./dashboard-view";
+import { TagEditor } from "./tag-editor";
 
 /** Add / edit a single card. */
 function CardFormDialog({
@@ -59,6 +65,7 @@ function CardFormDialog({
 }) {
   const [front, setFront] = useState("");
   const [back, setBack] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -66,6 +73,7 @@ function CardFormDialog({
     if (open) {
       setFront(card?.front ?? "");
       setBack(card?.back ?? "");
+      setTags(card?.tags ?? []);
       setError(null);
     }
   }, [card, open]);
@@ -78,10 +86,10 @@ function CardFormDialog({
     setBusy(true);
     try {
       if (card) {
-        await api.cards.update(card.id, { front: front.trim(), back: back.trim() });
+        await api.cards.update(card.id, { front: front.trim(), back: back.trim(), tags });
         toast.success("Card updated");
       } else {
-        await api.cards.create(deckId, { front: front.trim(), back: back.trim() });
+        await api.cards.create(deckId, { front: front.trim(), back: back.trim(), tags });
         toast.success("Card added");
       }
       onOpenChange(false);
@@ -127,6 +135,10 @@ function CardFormDialog({
               onChange={(e) => setBack(e.target.value)}
             />
             <p className="text-right text-xs text-muted-foreground">{back.length}/2000</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="card-tags">Tags (optional)</Label>
+            <TagEditor id="card-tags" tags={tags} onChange={setTags} />
           </div>
           {error && <p className="text-sm text-rose-600">{error}</p>}
         </div>
@@ -304,6 +316,7 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
   const [deletingCard, setDeletingCard] = useState<Card | null>(null);
   const [deleteDeckOpen, setDeleteDeckOpen] = useState(false);
   const [busyDelete, setBusyDelete] = useState(false);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -319,6 +332,26 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Reset the tag filter when switching to another deck.
+  useEffect(() => {
+    setTagFilter(null);
+  }, [deckId]);
+
+  /** Distinct tags across the deck's cards, alphabetically. */
+  const allTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of cards ?? []) {
+      for (const t of c.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [cards]);
+
+  const visibleCards = useMemo(() => {
+    if (!cards) return [];
+    if (!tagFilter) return cards;
+    return cards.filter((c) => c.tags.some((t) => t.toLowerCase() === tagFilter.toLowerCase()));
+  }, [cards, tagFilter]);
 
   async function confirmDeleteCard() {
     if (!deletingCard) return;
@@ -377,6 +410,26 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
       go("deck", copy.id); // open the copy so the user lands where the action happened
     } catch (e) {
       toast.error(e instanceof ApiError ? e.message : "Failed to duplicate the deck.");
+    }
+  }
+
+  /** Download the deck as a portable JSON bundle (cards + tags). */
+  async function exportBundle() {
+    if (!deck) return;
+    try {
+      const bundle = await api.decks.exportBundle(deck.id);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${deck.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "deck"}-deckio.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Deck bundle exported — share it with anyone!");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Bundle export failed");
     }
   }
 
@@ -485,6 +538,9 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                   <DropdownMenuItem onClick={() => void exportCsv()}>
                     <Download className="h-4 w-4" /> Export CSV
                   </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void exportBundle()} disabled={empty}>
+                    <FileDown className="h-4 w-4" /> Export bundle (JSON)
+                  </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => void duplicateDeck()}
                     disabled={empty}
@@ -526,7 +582,20 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
       {/* ---------- Cards ---------- */}
       <div className="mt-6 flex items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 text-lg font-semibold">
-          Cards <Badge variant="secondary">{cards.length}</Badge>
+          Cards
+          <Badge variant="secondary">
+            {tagFilter ? `${visibleCards.length}/${cards.length}` : cards.length}
+          </Badge>
+          {tagFilter && (
+            <button
+              onClick={() => setTagFilter(null)}
+              className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 transition hover:bg-amber-200 dark:bg-amber-500/15 dark:text-amber-400"
+              aria-label={`Clear tag filter ${tagFilter}`}
+            >
+              <Tag className="h-3 w-3" /> {tagFilter}
+              <X className="h-3 w-3" />
+            </button>
+          )}
         </h2>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => void exportCsv()} className="gap-1.5">
@@ -547,6 +616,30 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
           </Button>
         </div>
       </div>
+
+      {/* ---------- Tag filter row ---------- */}
+      {allTags.length > 0 && (
+        <div className="nice-scrollbar mt-3 flex items-center gap-1.5 overflow-x-auto pb-1">
+          <span className="shrink-0 text-xs font-medium text-muted-foreground">Filter by tag:</span>
+          {allTags.map(([tag, count]) => {
+            const active = tagFilter?.toLowerCase() === tag.toLowerCase();
+            return (
+              <button
+                key={tag}
+                onClick={() => setTagFilter(active ? null : tag)}
+                aria-pressed={active}
+                className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-medium transition ${
+                  active
+                    ? "border-amber-400 bg-amber-100 text-amber-800 dark:border-amber-500/50 dark:bg-amber-500/15 dark:text-amber-300"
+                    : "bg-card text-muted-foreground hover:border-amber-300 hover:text-foreground"
+                }`}
+              >
+                {tag} <span className="ml-0.5 text-[10px] opacity-70">{count}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {empty ? (
         <div className="mt-4 flex flex-col items-center rounded-2xl border border-dashed py-14 text-center">
@@ -578,9 +671,18 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
             </Button>
           </div>
         </div>
+      ) : visibleCards.length === 0 ? (
+        <div className="mt-4 flex flex-col items-center rounded-2xl border border-dashed py-12 text-center">
+          <Tag className="h-8 w-8 text-muted-foreground" aria-hidden />
+          <h3 className="mt-3 font-semibold">No cards tagged “{tagFilter}”</h3>
+          <p className="mt-1 text-sm text-muted-foreground">Try a different tag or clear the filter.</p>
+          <Button size="sm" variant="outline" className="mt-4" onClick={() => setTagFilter(null)}>
+            Clear filter
+          </Button>
+        </div>
       ) : (
         <ul className="nice-scrollbar mt-4 max-h-[520px] divide-y overflow-y-auto rounded-xl border bg-card">
-          {cards.map((card) => {
+          {visibleCards.map((card) => {
             const label = dueLabel(card.due_at); // new | due | in 3d …
             return (
               <li key={card.id} className="group flex items-start justify-between gap-3 px-4 py-3">
@@ -594,6 +696,24 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                 >
                   <p className="truncate font-medium">{card.front}</p>
                   <p className="mt-0.5 truncate text-sm text-muted-foreground">{card.back}</p>
+                  {card.tags.length > 0 && (
+                    <span className="mt-1.5 flex flex-wrap gap-1">
+                      {card.tags.slice(0, 3).map((t) => (
+                        <span
+                          key={t}
+                          className="inline-flex items-center gap-0.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                        >
+                          <Tag className="h-2.5 w-2.5" />
+                          {t}
+                        </span>
+                      ))}
+                      {card.tags.length > 3 && (
+                        <span className="text-[10px] text-muted-foreground">
+                          +{card.tags.length - 3}
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </button>
                 <div className="flex shrink-0 items-center gap-2 pt-0.5">
                   {/* SRS state chip: new / due / scheduled */}

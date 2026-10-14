@@ -5,10 +5,13 @@ import {
   AlertCircle,
   ArrowLeft,
   BookOpen,
+  Brain,
   Flame,
+  History,
   Layers,
   LineChart,
   Play,
+  Sparkles,
   Target,
   Trophy,
   Zap,
@@ -18,9 +21,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, api } from "@/lib/api";
-import { accuracyBg, accuracyColor, dayLabel, timeAgo } from "@/lib/format";
+import { accuracyBg, accuracyColor, dayLabel, formatDuration, timeAgo } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
-import type { ActivityDay, Deck, StatsOverview, WeakCard } from "@/lib/types";
+import type { ActivityDay, Deck, SessionSummary, StatsOverview, WeakCard } from "@/lib/types";
 
 /** Days fetched for the heatmap — 26 full weeks (fills the card nicely). */
 const HEATMAP_DAYS = 182;
@@ -173,19 +176,22 @@ export function StatsView() {
   const [overview, setOverview] = useState<StatsOverview | null>(null);
   const [weak, setWeak] = useState<WeakCard[] | null>(null);
   const [decks, setDecks] = useState<Deck[] | null>(null);
+  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      // 91-day window powers both the heatmap and (sliced) the weekly bars.
-      const [o, w, d] = await Promise.all([
+      // 182-day window powers both the heatmap and (sliced) the weekly bars.
+      const [o, w, d, s] = await Promise.all([
         api.stats.overview(HEATMAP_DAYS),
         api.stats.weakCards(),
         api.decks.list(),
+        api.stats.sessions(10),
       ]);
       setOverview(o);
       setWeak(w);
       setDecks(d);
+      setSessions(s);
       setError(null);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Failed to load statistics.");
@@ -211,7 +217,7 @@ export function StatsView() {
     );
   }
 
-  if (!overview || weak === null || decks === null) {
+  if (!overview || weak === null || decks === null || sessions === null) {
     return (
       <div className="mx-auto w-full max-w-5xl space-y-4 px-4 py-8">
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -221,6 +227,7 @@ export function StatsView() {
         </div>
         <Skeleton className="h-64 rounded-xl" />
         <Skeleton className="h-48 rounded-xl" />
+        <Skeleton className="h-64 rounded-xl" />
       </div>
     );
   }
@@ -430,6 +437,77 @@ export function StatsView() {
           )}
         </section>
       </div>
+
+      {/* ---------- Recent sessions ---------- */}
+      <section className="mt-6 rounded-2xl border bg-card p-6" aria-label="Recent study sessions">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 font-semibold">
+            <History className="h-4.5 w-4.5 text-teal-600" /> Recent sessions
+          </h2>
+          <Badge variant="outline" className="text-xs text-muted-foreground">
+            last {sessions.length}
+          </Badge>
+        </div>
+        {sessions.length === 0 ? (
+          <div className="mt-6 flex flex-col items-center py-8 text-center">
+            <span className="text-4xl" aria-hidden>
+              🕐
+            </span>
+            <p className="mt-3 text-sm text-muted-foreground">
+              No study sessions yet — open a deck and hit “Study”.
+            </p>
+          </div>
+        ) : (
+          <ul className="mt-4 divide-y">
+            {sessions.map((s) => (
+              <li key={s.id} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
+                <span
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                    s.mode === "quiz"
+                      ? "bg-violet-100 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400"
+                      : "bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400"
+                  }`}
+                  aria-hidden
+                >
+                  {s.mode === "quiz" ? <Brain className="h-4.5 w-4.5" /> : <BookOpen className="h-4.5 w-4.5" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-1.5 truncate text-sm font-medium">
+                    <button
+                      className="truncate rounded outline-none transition-colors hover:text-amber-600 focus-visible:ring-2 focus-visible:ring-amber-500"
+                      onClick={() => go("deck", s.deck_id)}
+                    >
+                      {s.deck_title}
+                    </button>
+                    {s.srs && (
+                      <span
+                        className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-500/15 dark:text-amber-400"
+                        title="Spaced-repetition smart review"
+                      >
+                        <Sparkles className="h-2.5 w-2.5" /> SRS
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {timeAgo(s.started_at)}
+                    {s.duration_seconds != null && s.duration_seconds > 1
+                      ? ` · ${formatDuration(s.duration_seconds)}`
+                      : ""}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className={`text-sm font-semibold ${accuracyColor(s.accuracy)}`}>
+                    {s.accuracy != null ? `${s.accuracy}%` : "—"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {s.reviews} review{s.reviews === 1 ? "" : "s"}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

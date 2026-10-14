@@ -10,6 +10,7 @@ import type {
   Card,
   CardInput,
   Deck,
+  DeckBundle,
   DeckInput,
   DeckStats,
   QuizAnswerOut,
@@ -17,6 +18,8 @@ import type {
   QuizStart,
   ReviewOut,
   ReviewResult,
+  SearchResults,
+  SessionSummary,
   StatsOverview,
   StudyNext,
   StudyStart,
@@ -152,12 +155,21 @@ export const api = {
     update: (id: number, payload: Partial<DeckInput>) =>
       request<Deck>("PUT", `/api/decks/${id}`, payload),
     duplicate: (id: number) => request<Deck>("POST", `/api/decks/${id}/duplicate`),
+    importBundle: (bundle: DeckBundle) =>
+      request<Deck>("POST", "/api/decks/import", bundle),
+    exportBundle: (id: number) => request<DeckBundle>("GET", `/api/decks/${id}/bundle`),
     remove: (id: number) => request<void>("DELETE", `/api/decks/${id}`),
   },
 
   // ---- Cards ----
   cards: {
-    list: (deckId: number) => request<Card[]>("GET", `/api/decks/${deckId}/cards`),
+    list: (deckId: number, params?: { q?: string; tag?: string }) => {
+      const sp = new URLSearchParams();
+      if (params?.q) sp.set("q", params.q);
+      if (params?.tag) sp.set("tag", params.tag);
+      const qs = sp.toString();
+      return request<Card[]>("GET", `/api/decks/${deckId}/cards${qs ? `?${qs}` : ""}`);
+    },
     create: (deckId: number, payload: Required<CardInput>) =>
       request<Card>("POST", `/api/decks/${deckId}/cards`, payload),
     update: (id: number, payload: CardInput) => request<Card>("PUT", `/api/cards/${id}`, payload),
@@ -211,5 +223,10 @@ export const api = {
       request<StatsOverview>("GET", `/api/stats/overview${days ? `?days=${days}` : ""}`),
     deck: (id: number) => request<DeckStats>("GET", `/api/stats/decks/${id}`),
     weakCards: () => request<WeakCard[]>("GET", "/api/stats/weak-cards"),
+    sessions: (limit = 15) =>
+      request<SessionSummary[]>("GET", `/api/stats/sessions?limit=${limit}`),
   },
+
+  // ---- Search (⌘K palette) ----
+  search: (q: string) => request<SearchResults>("GET", `/api/search?q=${encodeURIComponent(q)}`),
 };

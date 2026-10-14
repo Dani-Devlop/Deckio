@@ -43,6 +43,7 @@ export interface Card {
   deck_id: number;
   front: string;
   back: string;
+  tags: string[];
   created_at: string;
   // Spaced-repetition state (read-only, for UI chips):
   ease: number;
@@ -55,12 +56,55 @@ export interface Card {
 export interface CardInput {
   front?: string;
   back?: string;
+  tags?: string[];
 }
 
 export interface BulkImportResult {
   imported: number;
   skipped: number;
   errors: string[];
+}
+
+// ----------------------------- Search -----------------------------
+export interface SearchCardHit {
+  card_id: number;
+  deck_id: number;
+  deck_title: string;
+  front: string;
+  back: string;
+  tags: string[];
+}
+
+export interface SearchResults {
+  decks: Deck[];
+  cards: SearchCardHit[];
+}
+
+// ------------------------- Session history -------------------------
+export interface SessionSummary {
+  id: number;
+  deck_id: number;
+  deck_title: string;
+  mode: "study" | "quiz" | string;
+  srs: boolean;
+  started_at: string;
+  finished_at: string | null;
+  reviews: number;
+  correct: number;
+  accuracy: number | null;
+  duration_seconds: number | null;
+}
+
+// --------------------------- Deck bundle ---------------------------
+export interface DeckBundle {
+  version: number;
+  app: string;
+  title: string;
+  description: string | null;
+  color: string;
+  icon: string;
+  card_count: number;
+  cards: { front: string; back: string; tags: string[] }[];
 }
 
 // ----------------------------- Study -----------------------------

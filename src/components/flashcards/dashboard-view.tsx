@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
   Brain,
   Clock,
   CopyPlus,
+  FileDown,
   Loader2,
   MoreVertical,
   Pencil,
@@ -16,6 +17,7 @@ import {
   Target,
   Trash2,
 } from "lucide-react";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -43,7 +45,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api } from "@/lib/api";
 import { accuracyColor, timeAgo } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
-import type { Deck, StatsOverview } from "@/lib/types";
+import type { Deck, DeckBundle, StatsOverview } from "@/lib/types";
 
 export const DECK_COLORS = ["#f59e0b", "#f97316", "#f43f5e", "#10b981", "#14b8a6", "#8b5cf6"];
 export const DECK_ICONS = ["📚", "🧠", "🌱", "⚡", "🎯", "💼", "🗣️", "🧪", "🎨", "🧮", "🌍", "🏰"];
@@ -201,25 +203,42 @@ export function DeckFormDialog({
 /** One deck card in the dashboard grid. */
 function DeckCard({
   deck,
+  index,
   onOpen,
   onStudy,
+  onQuiz,
   onEdit,
   onDuplicate,
+  onExportBundle,
   onDelete,
   duplicating,
 }: {
   deck: Deck;
+  index: number;
   onOpen: () => void;
   onStudy: () => void;
+  onQuiz: () => void;
   onEdit: () => void;
   onDuplicate: () => void;
+  onExportBundle: () => void;
   onDelete: () => void;
   duplicating: boolean;
 }) {
   return (
-    <div className="group relative flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:shadow-md">
-      {/* color accent strip */}
-      <span className="h-1.5 w-full" style={{ backgroundColor: deck.color }} aria-hidden />
+    <motion.div
+      initial={{ opacity: 0, y: 14 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, delay: Math.min(index * 0.05, 0.4), ease: "easeOut" }}
+      className="group relative flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-lg"
+    >
+      {/* gradient color accent strip (deck color → darker shade) */}
+      <span
+        className="h-1.5 w-full"
+        style={{
+          backgroundImage: `linear-gradient(90deg, ${deck.color}, ${deck.color}aa 70%, ${deck.color}66)`,
+        }}
+        aria-hidden
+      />
       {duplicating && (
         <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-background/70 backdrop-blur-[2px]" aria-live="polite">
           <Loader2 className="h-5 w-5 animate-spin text-amber-500" />
@@ -234,8 +253,13 @@ function DeckCard({
             aria-label={`Open deck ${deck.title}`}
           >
             <span
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-xl"
-              style={{ backgroundColor: `${deck.color}1f`, color: deck.color }}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-xl ring-1 ring-inset transition-transform duration-200 group-hover:scale-105"
+              style={{
+                backgroundColor: `${deck.color}1f`,
+                color: deck.color,
+                // @ts-expect-error CSS custom ring color
+                "--tw-ring-color": `${deck.color}33`,
+              }}
               aria-hidden
             >
               {deck.icon}
@@ -264,6 +288,9 @@ function DeckCard({
               </DropdownMenuItem>
               <DropdownMenuItem onClick={onDuplicate} disabled={deck.card_count === 0}>
                 <CopyPlus className="h-4 w-4" /> Duplicate
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={onExportBundle} disabled={deck.card_count === 0}>
+                <FileDown className="h-4 w-4" /> Export bundle (JSON)
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={onDelete} className="text-rose-600 focus:text-rose-600">
@@ -305,13 +332,13 @@ function DeckCard({
             variant="outline"
             className="gap-1.5"
             disabled={deck.card_count === 0}
-            onClick={onOpen}
+            onClick={onQuiz}
           >
             <Brain className="h-3.5 w-3.5" /> Quiz
           </Button>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -329,6 +356,8 @@ export function DashboardView() {
   const [deleting, setDeleting] = useState<Deck | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [duplicating, setDuplicating] = useState<number | null>(null);
+  const [importingBundle, setImportingBundle] = useState(false);
+  const bundleInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -371,6 +400,53 @@ export function DashboardView() {
       toast.error(e instanceof ApiError ? e.message : "Failed to duplicate the deck.");
     } finally {
       setDuplicating(null);
+    }
+  }
+
+  /** Download a deck as a portable JSON bundle from the dashboard. */
+  async function exportBundle(deck: Deck) {
+    try {
+      const bundle = await api.decks.exportBundle(deck.id);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${deck.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "deck"}-deckio.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Deck bundle exported — share it with anyone!");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Bundle export failed");
+    }
+  }
+
+  /** Import a deck from a previously exported Deckio JSON bundle. */
+  async function importBundle(file: File) {
+    setImportingBundle(true);
+    try {
+      const text = await file.text();
+      const parsed: unknown = JSON.parse(text);
+      // Loose client-side validation before hitting the API.
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        !Array.isArray((parsed as DeckBundle).cards) ||
+        (parsed as DeckBundle).cards.length === 0 ||
+        typeof (parsed as DeckBundle).title !== "string"
+      ) {
+        throw new Error("This file doesn't look like a Deckio bundle (title + cards required).");
+      }
+      const deck = await api.decks.importBundle(parsed as DeckBundle);
+      toast.success(`Imported “${deck.title}” with ${deck.card_count} cards`);
+      await load();
+    } catch (e) {
+      if (e instanceof ApiError) toast.error(e.message);
+      else if (e instanceof SyntaxError) toast.error("Invalid JSON file.");
+      else toast.error(e instanceof Error ? e.message : "Bundle import failed.");
+    } finally {
+      setImportingBundle(false);
     }
   }
 
@@ -440,6 +516,28 @@ export function DashboardView() {
               <SelectItem value="cards">Most cards</SelectItem>
             </SelectContent>
           </Select>
+          <Button
+            variant="outline"
+            onClick={() => bundleInputRef.current?.click()}
+            disabled={importingBundle}
+            className="gap-1.5"
+            aria-label="Import a deck bundle (JSON)"
+          >
+            {importingBundle ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4 rotate-180" />}
+            <span className="hidden sm:inline">Import bundle</span>
+          </Button>
+          <input
+            ref={bundleInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="sr-only"
+            aria-label="Deck bundle JSON file"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void importBundle(f);
+              e.target.value = ""; // allow re-selecting the same file
+            }}
+          />
           <Button
             onClick={() => {
               setEditing(null);
@@ -526,17 +624,20 @@ export function DashboardView() {
         </p>
       ) : (
         <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {visible.map((deck) => (
+          {visible.map((deck, i) => (
             <DeckCard
               key={deck.id}
               deck={deck}
+              index={i}
               onOpen={() => go("deck", deck.id)}
               onStudy={() => goStudy(deck.id, deck.due_count > 0)}
+              onQuiz={() => go("quiz", deck.id)}
               onEdit={() => {
                 setEditing(deck);
                 setFormOpen(true);
               }}
               onDuplicate={() => void duplicate(deck)}
+              onExportBundle={() => void exportBundle(deck)}
               duplicating={duplicating === deck.id}
               onDelete={() => setDeleting(deck)}
             />

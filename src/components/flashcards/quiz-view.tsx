@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Loader2, RotateCcw, Trophy, X } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
+import { ArrowLeft, Brain, Check, Loader2, RotateCcw, Settings2, Trophy, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,8 @@ import { formatDuration } from "@/lib/format";
 import { useAppStore } from "@/lib/store";
 import type { QuizResult, QuizStart } from "@/lib/types";
 
+const QUIZ_LENGTHS = [5, 10, 15] as const;
+
 /** Quiz mode: server-generated multiple choice with instant feedback. */
 export function QuizView({ deckId }: { deckId: number }) {
   const go = useAppStore((s) => s.go);
@@ -21,24 +23,28 @@ export function QuizView({ deckId }: { deckId: number }) {
   const [correctAnswer, setCorrectAnswer] = useState<string | null>(null);
   const [answeredCount, setAnsweredCount] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
-  const [phase, setPhase] = useState<"loading" | "playing" | "done" | "error">("loading");
+  const [phase, setPhase] = useState<"setup" | "loading" | "playing" | "done" | "error">("setup");
   const [result, setResult] = useState<QuizResult | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [limit, setLimit] = useState<number | null>(10); // null = every card
   const advancing = useRef(false);
 
-  const fetchQuiz = useCallback(async () => {
-    // Fetches questions; all setState calls run after the await resolves.
-    try {
-      const q = await api.quiz.start(deckId);
-      setQuiz(q);
-      setPhase("playing");
-    } catch (e) {
-      setMessage(e instanceof ApiError ? e.message : "Failed to start the quiz.");
-      setPhase("error");
-    }
-  }, [deckId]);
+  const fetchQuiz = useCallback(
+    async (count: number | null) => {
+      // Fetches questions; all setState calls run after the await resolves.
+      try {
+        const q = await api.quiz.start(deckId, count ?? undefined);
+        setQuiz(q);
+        setPhase("playing");
+      } catch (e) {
+        setMessage(e instanceof ApiError ? e.message : "Failed to start the quiz.");
+        setPhase("error");
+      }
+    },
+    [deckId]
+  );
 
-  /** Full reset + restart (used by the Retry button — an event handler). */
+  /** Full reset + restart with the current length (Retry button — an event handler). */
   const startQuiz = useCallback(() => {
     setResult(null);
     setIndex(0);
@@ -48,14 +54,20 @@ export function QuizView({ deckId }: { deckId: number }) {
     setCorrectCount(0);
     advancing.current = false;
     setPhase("loading");
-    void fetchQuiz();
-  }, [fetchQuiz]);
+    void fetchQuiz(limit);
+  }, [fetchQuiz, limit]);
 
-  useEffect(() => {
-    // Initial load on mount — setState happens asynchronously after awaits.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchQuiz();
-  }, [fetchQuiz]);
+  /** Back to the length picker. */
+  const backToSetup = useCallback(() => {
+    setResult(null);
+    setQuiz(null);
+    setIndex(0);
+    setSelected(null);
+    setCorrectAnswer(null);
+    setAnsweredCount(0);
+    setCorrectCount(0);
+    setPhase("setup");
+  }, []);
 
   // ---- Answer the current question, show feedback, then advance ----
   async function choose(option: string) {
@@ -93,6 +105,76 @@ export function QuizView({ deckId }: { deckId: number }) {
       setSelected(null);
       toast.error(e instanceof ApiError ? e.message : "Failed to submit the answer");
     }
+  }
+
+  // ---- Setup screen: pick how many questions ----
+  if (phase === "setup") {
+    return (
+      <div className="mx-auto w-full max-w-xl px-4 py-10">
+        <Button variant="ghost" onClick={() => go("deck", deckId)} className="mb-4 gap-1.5">
+          <ArrowLeft className="h-4 w-4" /> Back to deck
+        </Button>
+
+        <div className="rounded-2xl border bg-card p-8 text-center shadow-sm">
+          <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-md">
+            <Brain className="h-8 w-8" />
+          </span>
+          <h1 className="mt-4 text-2xl font-bold tracking-tight">Quiz time!</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Multiple choice · 4 options per question · instant feedback
+          </p>
+
+          <div
+            className="mt-6 flex items-center justify-center gap-2"
+            role="radiogroup"
+            aria-label="Number of questions"
+          >
+            {QUIZ_LENGTHS.map((n) => (
+              <button
+                key={n}
+                type="button"
+                role="radio"
+                aria-checked={limit === n}
+                onClick={() => setLimit(n)}
+                className={`h-11 w-16 rounded-xl border text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+                  limit === n
+                    ? "border-amber-400 bg-amber-50 text-amber-800 shadow-sm dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300"
+                    : "bg-card text-muted-foreground hover:border-amber-300 hover:text-foreground"
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={limit === null}
+              onClick={() => setLimit(null)}
+              className={`h-11 rounded-xl border px-4 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+                limit === null
+                  ? "border-amber-400 bg-amber-50 text-amber-800 shadow-sm dark:border-amber-500/50 dark:bg-amber-500/10 dark:text-amber-300"
+                  : "bg-card text-muted-foreground hover:border-amber-300 hover:text-foreground"
+              }`}
+            >
+              All cards
+            </button>
+          </div>
+
+          <Button
+            onClick={() => {
+              setPhase("loading");
+              void fetchQuiz(limit);
+            }}
+            className="mt-6 h-11 w-full gap-2 bg-amber-500 text-base text-white hover:bg-amber-600"
+          >
+            <Brain className="h-5 w-5" /> Start quiz
+          </Button>
+          <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+            <Settings2 className="h-3 w-3" /> You can retry or change the length after the quiz
+          </p>
+        </div>
+      </div>
+    );
   }
 
   if (phase === "loading") {
@@ -187,6 +269,9 @@ export function QuizView({ deckId }: { deckId: number }) {
         <div className="mt-8 flex flex-wrap justify-center gap-2">
           <Button onClick={() => void startQuiz()} className="gap-1.5 bg-amber-500 text-white hover:bg-amber-600">
             <RotateCcw className="h-4 w-4" /> Retry quiz
+          </Button>
+          <Button variant="outline" onClick={backToSetup} className="gap-1.5">
+            <Settings2 className="h-4 w-4" /> Change length
           </Button>
           <Button variant="outline" onClick={() => go("deck", deckId)}>
             Back to deck

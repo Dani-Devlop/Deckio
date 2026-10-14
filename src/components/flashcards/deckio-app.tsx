@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { BarChart3, Layers, LogOut, Moon, Settings, Sun } from "lucide-react";
+import { BarChart3, Layers, LogOut, Moon, Search, Settings, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
@@ -20,6 +20,7 @@ import { useAppStore } from "@/lib/store";
 
 import { AccountSettingsDialog } from "./account-settings-dialog";
 import { AuthView } from "./auth-view";
+import { CommandPalette, openCommandPalette } from "./command-palette";
 import { DashboardView } from "./dashboard-view";
 import { DeckDetailView } from "./deck-detail-view";
 import { QuizView } from "./quiz-view";
@@ -67,6 +68,19 @@ function SiteHeader() {
         <BrandLogo onClick={() => go("decks")} />
 
         <nav className="flex items-center gap-1.5" aria-label="Main navigation">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={openCommandPalette}
+            className="h-9 gap-2 border-dashed text-muted-foreground hover:text-foreground"
+            aria-label="Open search (Command palette)"
+          >
+            <Search className="h-4 w-4" />
+            <span className="hidden md:inline">Search…</span>
+            <kbd className="hidden rounded border bg-muted px-1.5 font-mono text-[10px] font-semibold text-muted-foreground md:inline">
+              ⌘K
+            </kbd>
+          </Button>
           <Button
             variant={view === "stats" ? "secondary" : "ghost"}
             size="sm"
@@ -120,9 +134,17 @@ function SiteFooter() {
           <span className="font-semibold text-foreground">Deckio</span> — smart flashcards for
           faster learning.
         </p>
-        <p className="flex items-center gap-1.5">
+        <p className="flex flex-wrap items-center justify-center gap-1.5">
           <span>FastAPI · PostgreSQL · Next.js</span>
           <span aria-hidden>·</span>
+          <span className="hidden items-center gap-1 sm:inline-flex">
+            Press
+            <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground">
+              ⌘K
+            </kbd>
+            to search
+          </span>
+          <span aria-hidden className="hidden sm:inline">·</span>
           <a
             href="https://github.com/Dani-Devlop/Deckio"
             target="_blank"
@@ -163,7 +185,12 @@ export function DeckioApp() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      {user && <SiteHeader />}
+      {user && (
+        <>
+          <SiteHeader />
+          <CommandPalette />
+        </>
+      )}
       <main className="flex-1">
         <motion.div
           key={viewKey}
