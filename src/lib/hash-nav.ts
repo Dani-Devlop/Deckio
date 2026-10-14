@@ -2,7 +2,7 @@
  *
  * Maps between zustand view state and the URL hash so the browser's
  * back/forward buttons and page refreshes restore the on-screen view:
- *   #/decks · #/deck/3 · #/study/3 · #/study/3/srs · #/quiz/3 · #/stats
+ *   #/decks · #/deck/3 · #/study/3 · #/study/3/srs · #/study/3/type · #/quiz/3 · #/stats
  * The auth view has no hash (empty string — the URL stays clean), and the
  * `/?share=<token>` flow is orthogonal (query string, never a hash).
  */
@@ -13,17 +13,26 @@ export interface HashViewState {
   view: ViewName;
   deckId: number | null;
   srs: boolean;
+  typing: boolean;
 }
 
-/** Build the URL hash for a view (with the leading "#"; "" for auth). */
-export function viewToHash(view: ViewName, deckId: number | null, srs: boolean): string {
+/** Build the URL hash for a view (with the leading "#"; "" for auth).
+ * `srs` and `typing` are mutually exclusive study flavors. */
+export function viewToHash(
+  view: ViewName,
+  deckId: number | null,
+  srs: boolean,
+  typing = false
+): string {
   switch (view) {
     case "decks":
       return "#/decks";
     case "deck":
       return deckId != null ? `#/deck/${deckId}` : "#/decks";
     case "study":
-      return deckId != null ? `#/study/${deckId}${srs ? "/srs" : ""}` : "#/decks";
+      return deckId != null
+        ? `#/study/${deckId}${srs ? "/srs" : typing ? "/type" : ""}`
+        : "#/decks";
     case "quiz":
       return deckId != null ? `#/quiz/${deckId}` : "#/decks";
     case "stats":
@@ -41,25 +50,29 @@ export function hashToView(hash: string): HashViewState | null {
   const segments = hash.replace(/^#+/, "").split("/").filter(Boolean); // tolerate #, extra slashes
   if (segments.length === 0) return null;
   const idAt = (i: number) => segments[i] !== undefined && /^\d+$/.test(segments[i]);
+  const flags = () => ({ srs: false, typing: false });
 
   switch (segments[0]) {
     case "decks":
-      return segments.length === 1 ? { view: "decks", deckId: null, srs: false } : null;
+      return segments.length === 1 ? { view: "decks", deckId: null, ...flags() } : null;
     case "stats":
-      return segments.length === 1 ? { view: "stats", deckId: null, srs: false } : null;
+      return segments.length === 1 ? { view: "stats", deckId: null, ...flags() } : null;
     case "deck":
       return segments.length === 2 && idAt(1)
-        ? { view: "deck", deckId: Number(segments[1]), srs: false }
+        ? { view: "deck", deckId: Number(segments[1]), ...flags() }
         : null;
     case "quiz":
       return segments.length === 2 && idAt(1)
-        ? { view: "quiz", deckId: Number(segments[1]), srs: false }
+        ? { view: "quiz", deckId: Number(segments[1]), ...flags() }
         : null;
     case "study": {
       if (!idAt(1)) return null;
-      if (segments.length === 2) return { view: "study", deckId: Number(segments[1]), srs: false };
+      if (segments.length === 2)
+        return { view: "study", deckId: Number(segments[1]), ...flags() };
       if (segments.length === 3 && segments[2] === "srs")
-        return { view: "study", deckId: Number(segments[1]), srs: true };
+        return { view: "study", deckId: Number(segments[1]), srs: true, typing: false };
+      if (segments.length === 3 && segments[2] === "type")
+        return { view: "study", deckId: Number(segments[1]), srs: false, typing: true };
       return null;
     }
     default:

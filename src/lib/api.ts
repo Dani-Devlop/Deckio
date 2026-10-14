@@ -26,6 +26,7 @@ import type {
   StatsOverview,
   StudyNext,
   StudyStart,
+  TypedAnswerOut,
   User,
   WeakCard,
 } from "./types";
@@ -215,6 +216,15 @@ export const api = {
       ),
     review: (sessionId: number, cardId: number, result: ReviewResult) =>
       request<ReviewOut>("POST", "/api/study/review", { session_id: sessionId, card_id: cardId, result }),
+    // Typed (free-recall) answer — the server grades it (normalizing case,
+    // whitespace and punctuation; accents are significant). "almost" marks a
+    // 1-char-off miss; the client may override via review(sessionId, cardId, "correct").
+    typed: (sessionId: number, cardId: number, answer: string) =>
+      request<TypedAnswerOut>("POST", "/api/study/typed", {
+        session_id: sessionId,
+        card_id: cardId,
+        answer,
+      }),
   },
 
   // ---- Quiz ----

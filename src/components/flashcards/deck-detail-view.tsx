@@ -13,6 +13,7 @@ import {
   Globe,
   History,
   ImagePlus,
+  Keyboard,
   Lightbulb,
   Loader2,
   MoreVertical,
@@ -49,6 +50,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, api } from "@/lib/api";
 import { accuracyColor, dueLabel, formatDate, timeAgo } from "@/lib/format";
+import { dataUriKb, fileToDataUri } from "@/lib/image";
 import { useAppStore } from "@/lib/store";
 import type { BulkImportResult, Card, Deck, DeckBundle } from "@/lib/types";
 
@@ -78,8 +80,11 @@ function CardFormDialog({
   const [hint, setHint] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [imgBroken, setImgBroken] = useState(false);
+  const [imgBusy, setImgBusy] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -95,6 +100,22 @@ function CardFormDialog({
 
   const trimmedUrl = imageUrl.trim();
   const urlValid = trimmedUrl === "" || isValidImageUrl(trimmedUrl);
+
+  /** Run a picked/dropped/pasted image file through the data-URI pipeline. */
+  const acceptImageFile = async (file: File | null | undefined) => {
+    if (!file || imgBusy) return;
+    setImgBusy(true);
+    try {
+      const uri = await fileToDataUri(file);
+      setImageUrl(uri);
+      setImgBroken(false);
+      toast.success(`Image attached (${dataUriKb(uri)} KB)`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not process that image.");
+    } finally {
+      setImgBusy(false);
+    }
+  };
 
   async function save() {
     if (!front.trim() || !back.trim()) {
@@ -136,8 +157,21 @@ function CardFormDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+    >
+      <DialogContent
+        className="sm:max-w-lg"
+        onPaste={(e) => {
+          // Paste an image straight from the clipboard (screenshot flow).
+          const file = Array.from(e.clipboardData?.items ?? []).find((i) => i.kind === "file")?.getAsFile();
+          if (file && file.type.startsWith("image/")) {
+            e.preventDefault();
+            void acceptImageFile(file);
+          }
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{card ? "Edit card" : "Add a card"}</DialogTitle>
           <DialogDescription>
@@ -197,16 +231,37 @@ function CardFormDialog({
                 id="card-image"
                 type="text"
                 inputMode="url"
-                maxLength={500}
-                placeholder="https://example.com/picture.jpg"
+                placeholder="https://example.com/picture.jpg — or upload / paste / drop an image"
                 value={imageUrl}
                 onChange={(e) => {
                   setImageUrl(e.target.value);
                   setImgBroken(false);
                 }}
                 aria-invalid={trimmedUrl !== "" && !urlValid}
-                className={trimmedUrl !== "" && !urlValid ? "border-rose-400 focus-visible:ring-rose-300" : ""}
+                className={`min-w-0 flex-1 ${trimmedUrl !== "" && !urlValid ? "border-rose-400 focus-visible:ring-rose-300" : ""}`}
               />
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                className="hidden"
+                aria-hidden
+                tabIndex={-1}
+                onChange={(e) => {
+                  void acceptImageFile(e.target.files?.[0]);
+                  e.target.value = ""; // allow re-picking the same file
+                }}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 shrink-0 gap-1.5 px-3"
+                disabled={imgBusy}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {imgBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                <span className="hidden sm:inline">Upload</span>
+              </Button>
               {trimmedUrl !== "" && (
                 <Button
                   type="button"
@@ -225,18 +280,36 @@ function CardFormDialog({
             </div>
             {trimmedUrl !== "" && (
               <div
-                className={`flex items-center justify-center overflow-hidden rounded-xl border bg-muted/40 p-2 ${
-                  urlValid ? "" : "opacity-50"
-                }`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  void acceptImageFile(e.dataTransfer.files?.[0]);
+                }}
+                className={`flex flex-col items-center justify-center gap-1 overflow-hidden rounded-xl border-2 border-dashed bg-muted/40 p-2 transition-colors ${
+                  dragOver ? "border-amber-400 bg-amber-50 dark:bg-amber-500/10" : "border-transparent"
+                } ${urlValid ? "" : "opacity-50"}`}
+                aria-label="Image preview — drop an image here to replace it"
               >
                 {urlValid && !imgBroken ? (
-                  <img
-                    src={trimmedUrl}
-                    alt="Card image preview"
-                    referrerPolicy="no-referrer"
-                    onError={() => setImgBroken(true)}
-                    className="max-h-24 w-auto max-w-full rounded-lg object-contain"
-                  />
+                  <>
+                    <img
+                      src={trimmedUrl}
+                      alt="Card image preview"
+                      referrerPolicy="no-referrer"
+                      onError={() => setImgBroken(true)}
+                      className="max-h-24 w-auto max-w-full rounded-lg object-contain"
+                    />
+                    <p className="text-right text-[10px] text-muted-foreground">
+                      {trimmedUrl.startsWith("data:image/")
+                        ? `Inline image · ${dataUriKb(trimmedUrl)} KB · drop to replace`
+                        : "External image · drop or paste to replace"}
+                    </p>
+                  </>
                 ) : (
                   <p className="flex items-center gap-1.5 py-2 text-xs text-muted-foreground">
                     <ImagePlus className="h-3.5 w-3.5" />
@@ -247,7 +320,11 @@ function CardFormDialog({
                 )}
               </div>
             )}
-            <p className="text-right text-xs text-muted-foreground">{imageUrl.length}/500</p>
+            {!trimmedUrl && (
+              <p className="text-right text-xs text-muted-foreground">
+                Upload, paste (Ctrl+V) or drop an image — stored inline, or use a URL
+              </p>
+            )}
           </div>
           {error && <p className="text-sm text-rose-600">{error}</p>}
         </div>
@@ -613,7 +690,7 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 className="gap-1.5 bg-amber-500 text-white hover:bg-amber-600"
                 onClick={() => goStudy(deck.id, false)}
@@ -634,6 +711,15 @@ export function DeckDetailView({ deckId }: { deckId: number }) {
                     {deck.due_count}
                   </span>
                 )}
+              </Button>
+              <Button
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => goStudy(deck.id, false, true)}
+                disabled={empty}
+                title="Type the answer from memory — free-recall practice"
+              >
+                <Keyboard className="h-4 w-4" /> Type
               </Button>
               <Button
                 variant="outline"

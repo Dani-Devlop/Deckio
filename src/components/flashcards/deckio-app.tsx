@@ -203,7 +203,12 @@ export function DeckioApp() {
       if (!parsed) return;
       const s = useAppStore.getState();
       if (!s.user) return; // deep links only apply to signed-in views
-      if (s.view !== parsed.view || s.activeDeckId !== parsed.deckId || s.studySrs !== parsed.srs) {
+      if (
+        s.view !== parsed.view ||
+        s.activeDeckId !== parsed.deckId ||
+        s.studySrs !== parsed.srs ||
+        s.studyTyping !== parsed.typing
+      ) {
         s.applyHashState(parsed);
       }
     };

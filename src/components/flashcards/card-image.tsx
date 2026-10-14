@@ -17,10 +17,19 @@ import { ImageIcon } from "lucide-react";
 
 export const IMAGE_PREFIXES = ["http://", "https://", "data:image/", "//", "/"];
 
+/** Data URIs get their own (much larger) budget — the backend accepts inline
+ * images up to 700,000 chars, other URLs stay capped at 500. */
+export const MAX_DATA_URI_LENGTH = 700_000;
+const DATA_URI_RE = /^data:image\/(png|jpeg|jpg|webp|gif);base64,[a-z0-9+/=\s]+$/i;
+
 /** Client-side mirror of the backend's `clean_image_url` scheme check. */
 export function isValidImageUrl(url: string): boolean {
-  const u = url.trim().toLowerCase();
-  return u.length > 0 && u.length <= 500 && IMAGE_PREFIXES.some((p) => u.startsWith(p));
+  const u = url.trim();
+  if (u.toLowerCase().startsWith("data:image/")) {
+    return u.length <= MAX_DATA_URI_LENGTH && DATA_URI_RE.test(u);
+  }
+  const lower = u.toLowerCase();
+  return lower.length > 0 && lower.length <= 500 && IMAGE_PREFIXES.some((p) => lower.startsWith(p));
 }
 
 export function CardImage({

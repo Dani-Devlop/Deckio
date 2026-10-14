@@ -61,6 +61,12 @@ const STUDY_ROWS: { keys: string[]; label: string }[] = [
   { keys: ["?"], label: "Open / close this cheat sheet" },
 ];
 
+const TYPED_ROWS: { keys: string[]; label: string }[] = [
+  { keys: ["Enter"], label: "Check the typed answer" },
+  { keys: ["Enter"], label: "Next card (after grading)" },
+  { keys: ["?"], label: "Open / close this cheat sheet" },
+];
+
 const QUIZ_ROWS: { keys: string[]; label: string }[] = [
   { keys: ["1", "2", "3", "4"], label: "Pick option 1–4" },
   { keys: ["?"], label: "Open / close this cheat sheet" },
@@ -72,12 +78,15 @@ export function ShortcutsDialog({
   open,
   onOpenChange,
   mode,
+  typed = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: "study" | "quiz";
+  /** study mode only: show typed-answering rows instead of flip rows. */
+  typed?: boolean;
 }) {
-  const rows = mode === "study" ? STUDY_ROWS : QUIZ_ROWS;
+  const rows = mode === "study" ? (typed ? TYPED_ROWS : STUDY_ROWS) : QUIZ_ROWS;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-shortcuts-dialog="" className="sm:max-w-sm">
@@ -86,9 +95,11 @@ export function ShortcutsDialog({
             <Keyboard className="h-5 w-5 text-amber-500" /> Keyboard shortcuts
           </DialogTitle>
           <DialogDescription>
-            {mode === "study"
-              ? "Hands-on-deck studying — no mouse needed."
-              : "Answer quizzes at speed — no mouse needed."}
+            {mode === "quiz"
+              ? "Answer quizzes at speed — no mouse needed."
+              : typed
+                ? "Free-recall practice — no mouse needed."
+                : "Hands-on-deck studying — no mouse needed."}
           </DialogDescription>
         </DialogHeader>
         <div className="divide-y">

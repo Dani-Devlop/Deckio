@@ -1,27 +1,44 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, Check, Keyboard, Lightbulb, Loader2, RotateCcw, Sparkles, Trophy, X } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  CheckCircle2,
+  Keyboard,
+  Lightbulb,
+  Loader2,
+  RotateCcw,
+  Sparkles,
+  Trophy,
+  X,
+  XCircle,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { motion } from "framer-motion";
 import { ApiError, api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
-import type { StudyNext, StudyStart } from "@/lib/types";
+import type { StudyNext, StudyStart, TypedAnswerOut } from "@/lib/types";
 import type { ReviewResult } from "@/lib/types";
 
 import { CardImage } from "./card-image";
 import { ShortcutsDialog, shortcutBlocked } from "./shortcuts-dialog";
 
-/** Self-paced study mode: flip card → self-grade (Again / Got it). */
+/** Self-paced study: flip card → self-grade, or typed (free-recall) mode →
+ * type the answer and let the server grade it. */
 export function StudyView({ deckId }: { deckId: number }) {
   const go = useAppStore((s) => s.go);
   const initialSrs = useAppStore((s) => s.studySrs);
+  const initialTyping = useAppStore((s) => s.studyTyping);
   const [session, setSession] = useState<StudyStart | null>(null);
   const [isSrs, setIsSrs] = useState(initialSrs);
+  const [isTyping] = useState(initialTyping); // fixed per mount; hash drives re-entry
   const [planNote, setPlanNote] = useState<string | null>(null); // limit reason from start
   const [current, setCurrent] = useState<StudyNext | null>(null);
   const [flipped, setFlipped] = useState(false);
@@ -31,8 +48,15 @@ export function StudyView({ deckId }: { deckId: number }) {
   const [busy, setBusy] = useState(false);
   const [hintShown, setHintShown] = useState(false); // per-card, reset on next
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // ---- Typed mode state ----
+  const [typedAnswer, setTypedAnswer] = useState("");
+  const [graded, setGraded] = useState<TypedAnswerOut | null>(null);
+  const [shakeKey, setShakeKey] = useState(0); // bump → replay the shake animation
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  // Synchronous busy guard: window keydown + a focused button's native click
+  // can BOTH fire for one Enter/Space press — state alone is too late.
+  const busyRef = useRef(false);
 
   // ---- Boot: open a session and fetch the first card ----
   useEffect(() => {
@@ -59,10 +83,17 @@ export function StudyView({ deckId }: { deckId: number }) {
     };
   }, [deckId, initialSrs]);
 
+  const claimBusy = useCallback(() => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    return true;
+  }, []);
+
   // ---- Submit a review and move to the next card ----
   const review = useCallback(
     async (result: ReviewResult) => {
-      if (!session || !current?.card || busy || phaseRef.current !== "playing") return;
+      if (!session || !current?.card || phaseRef.current !== "playing") return;
+      if (!claimBusy()) return;
       setBusy(true);
       const cardId = current.card.id;
       try {
@@ -80,21 +111,106 @@ export function StudyView({ deckId }: { deckId: number }) {
         toast.error(e instanceof ApiError ? e.message : "Failed to save the review");
         setResults((r) => r.slice(0, -1)); // roll back optimistic append
       } finally {
+        busyRef.current = false;
         setBusy(false);
       }
     },
-    [busy, current, deckId, session]
+    [claimBusy, current, deckId, session]
   );
 
-  // ---- Keyboard shortcuts: Space/Enter = flip (question side) or "Got it"
-  // (answer side), 1 = again, 2 = got it, "?" = shortcut cheat sheet. ----
+  // ---- Typed mode: submit the answer for server-side grading ----
+  const checkTyped = useCallback(async () => {
+    if (!session || !current?.card || graded || phaseRef.current !== "playing") return;
+    const answer = typedAnswer.trim();
+    if (!answer) {
+      setShakeKey((k) => k + 1); // empty submit → shake, no API call
+      return;
+    }
+    if (!claimBusy()) return;
+    setBusy(true);
+    try {
+      const res = await api.study.typed(session.session_id, current.card.id, answer);
+      setGraded(res);
+      setResults((r) => [...r, res.correct ? "correct" : "wrong"]);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Failed to check the answer");
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [claimBusy, current, graded, session, typedAnswer]);
+
+  /** "I was right" override for a wrong/almost grade — upserts the review as
+   * correct (last grade wins) and fixes the local tally. */
+  const overrideTyped = useCallback(async () => {
+    if (!session || !current?.card || !graded || graded.correct) return;
+    if (!claimBusy()) return;
+    setBusy(true);
+    try {
+      await api.study.review(session.session_id, current.card.id, "correct");
+      setGraded({ ...graded, correct: true });
+      setResults((r) => {
+        const copy = [...r];
+        copy[copy.length - 1] = "correct";
+        return copy;
+      });
+      toast.success("Marked as correct");
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Failed to update the review");
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [claimBusy, current, graded, session]);
+
+  /** Advance after a graded typed answer (Enter or the Next button). */
+  const nextTyped = useCallback(async () => {
+    if (!session || !graded || phaseRef.current !== "playing") return;
+    if (!claimBusy()) return;
+    setBusy(true);
+    try {
+      if (graded.finished) {
+        setPhase("done");
+      } else {
+        const nc = await api.study.next(deckId, session.session_id);
+        setCurrent(nc);
+        setTypedAnswer("");
+        setGraded(null);
+        setHintShown(false);
+      }
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Failed to load the next card");
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [claimBusy, deckId, graded, session]);
+
+  // ---- Keyboard shortcuts ----
+  // Flip mode: Space/Enter = flip (question side) or "Got it" (answer side),
+  // 1 = again, 2 = got it, "?" = cheat sheet.
+  // Typed mode: Enter on the input checks (its own handler); Enter anywhere
+  // after grading advances; "?" = cheat sheet. The guard ignores keystrokes
+  // aimed at the input while it's focused.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (phaseRef.current !== "playing") return;
-      if (shortcutBlocked(e)) return;
       if (e.key === "?") {
         e.preventDefault();
         setShortcutsOpen((o) => !o);
+        return;
+      }
+      if (shortcutBlocked(e)) return;
+      if (isTyping) {
+        if (e.key === "Enter") {
+          if (graded) {
+            e.preventDefault();
+            void nextTyped();
+          } else if (document.activeElement?.tagName !== "INPUT") {
+            e.preventDefault();
+            void checkTyped();
+          }
+        }
         return;
       }
       if (e.code === "Space" || e.key === "Enter") {
@@ -109,7 +225,7 @@ export function StudyView({ deckId }: { deckId: number }) {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [flipped, review]);
+  }, [checkTyped, flipped, graded, isTyping, nextTyped, review]);
 
   if (phase === "loading") {
     return (
@@ -190,7 +306,7 @@ export function StudyView({ deckId }: { deckId: number }) {
                 });
             }}
           >
-            <RotateCcw className="h-4 w-4" /> {isSrs ? "Review again" : "Study again"}
+            <RotateCcw className="h-4 w-4" /> {isSrs ? "Review again" : isTyping ? "Practice again" : "Study again"}
           </Button>
           <Button variant="outline" onClick={() => go("deck", deckId)}>
             Back to deck
@@ -205,7 +321,9 @@ export function StudyView({ deckId }: { deckId: number }) {
   }
 
   const card = current?.card;
-  const reviewed = current?.reviewed ?? 0;
+  // Typed mode grades in place (current stays the same card until Next), so
+  // prefer the graded response's counters to keep the progress bar honest.
+  const reviewed = graded ? graded.reviewed : (current?.reviewed ?? 0);
   const total = current?.total ?? 0;
   const pct = total > 0 ? Math.round((reviewed / total) * 100) : 0;
 
@@ -252,8 +370,170 @@ export function StudyView({ deckId }: { deckId: number }) {
         </motion.p>
       )}
 
-      {/* ---------- Flashcard ---------- */}
-      <div className="mt-6" style={{ perspective: "1400px" }}>
+      {isTyping ? (
+        <>
+          {/* ---------- Typed mode: question card (static) ---------- */}
+          <div className="mt-6 flex min-h-64 flex-col items-center justify-center gap-3 overflow-hidden rounded-2xl border bg-card p-6 text-center shadow-sm">
+            <span className="text-xs font-medium uppercase tracking-widest text-muted-foreground">
+              Type the answer
+            </span>
+            {card?.image_url && (
+              <CardImage src={card.image_url} alt={`Image for: ${card.front}`} className="mt-1" />
+            )}
+            <p className="text-xl font-medium leading-relaxed sm:text-2xl">{card?.front}</p>
+            {card?.hint && hintShown && (
+              <motion.p
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex max-w-md items-start justify-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-sm italic text-amber-800 dark:bg-amber-500/10 dark:text-amber-300"
+              >
+                <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                {card.hint}
+              </motion.p>
+            )}
+          </div>
+
+          {/* ---------- Hint (until graded) ---------- */}
+          {card?.hint && !graded && (
+            <div className="mt-3 flex justify-center">
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-8 gap-1.5 text-xs ${
+                  hintShown
+                    ? "text-amber-700 dark:text-amber-400"
+                    : "text-muted-foreground hover:text-amber-600"
+                }`}
+                onClick={() => setHintShown((h) => !h)}
+                aria-pressed={hintShown}
+              >
+                <Lightbulb className="h-3.5 w-3.5" />
+                {hintShown ? "Hide hint" : "Need a hint?"}
+              </Button>
+            </div>
+          )}
+
+          {/* ---------- Answer input ---------- */}
+          {!graded ? (
+            <motion.div
+              key={shakeKey}
+              animate={shakeKey > 0 ? { x: [0, -7, 7, -5, 5, 0] } : { x: 0 }}
+              transition={{ duration: 0.3 }}
+              className="mt-5 flex flex-col gap-2 sm:flex-row"
+            >
+              <Input
+                autoFocus
+                value={typedAnswer}
+                onChange={(e) => setTypedAnswer(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void checkTyped();
+                  }
+                }}
+                disabled={busy}
+                placeholder="Type the answer…"
+                aria-label="Type the answer"
+                autoComplete="off"
+                className="h-12 rounded-xl text-lg focus-visible:ring-amber-400"
+              />
+              <Button
+                onClick={() => void checkTyped()}
+                disabled={busy}
+                className="h-12 shrink-0 gap-1.5 rounded-xl bg-amber-500 px-6 text-white hover:bg-amber-600"
+              >
+                {busy ? <Loader2 className="h-5 w-5 animate-spin" /> : <Check className="h-5 w-5" />} Check
+              </Button>
+              <Button
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  void review("wrong");
+                  setTypedAnswer("");
+                  setGraded(null);
+                }}
+                className="h-12 shrink-0 rounded-xl text-muted-foreground"
+              >
+                Don't know
+              </Button>
+            </motion.div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25 }}
+              className="mt-5 space-y-3"
+            >
+              {/* result banner */}
+              <div
+                className={`flex flex-wrap items-center gap-2 rounded-lg px-4 py-3 text-sm font-medium ${
+                  graded.correct
+                    ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                    : graded.almost
+                      ? "bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                      : "bg-rose-500/10 text-rose-700 dark:text-rose-300"
+                }`}
+                role="status"
+              >
+                {graded.correct ? (
+                  <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500" />
+                ) : graded.almost ? (
+                  <Lightbulb className="h-5 w-5 shrink-0 text-amber-500" />
+                ) : (
+                  <XCircle className="h-5 w-5 shrink-0 text-rose-500" />
+                )}
+                {graded.correct
+                  ? "Correct!"
+                  : graded.almost
+                    ? `So close — you typed “${graded.selected_answer}”, counted as wrong.`
+                    : `Not quite — you typed “${graded.selected_answer}”.`}
+                {!graded.correct && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto h-8 shrink-0 gap-1 border-amber-300 text-xs text-amber-700 hover:bg-amber-50 dark:border-amber-500/40 dark:text-amber-400 dark:hover:bg-amber-500/10"
+                    disabled={busy}
+                    onClick={() => void overrideTyped()}
+                  >
+                    <Check className="h-3.5 w-3.5" /> I was right
+                  </Button>
+                )}
+              </div>
+              {/* answer reveal */}
+              <div className="flex flex-col items-center justify-center gap-2 rounded-2xl border bg-amber-50 p-6 text-center shadow-sm dark:bg-amber-500/10">
+                <span className="text-xs font-medium uppercase tracking-widest text-amber-600">Answer</span>
+                {card?.image_url && (
+                  <CardImage src={card.image_url} alt={`Image for: ${card.back}`} className="mt-1" />
+                )}
+                <p className="text-xl font-medium leading-relaxed sm:text-2xl">{graded.correct_answer}</p>
+              </div>
+              <Button
+                onClick={() => void nextTyped()}
+                disabled={busy}
+                autoFocus
+                className="h-12 w-full gap-1.5 rounded-xl bg-amber-500 text-base text-white hover:bg-amber-600"
+              >
+                {busy ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <ArrowRight className="h-5 w-5" />
+                )}
+                {graded.finished ? "See results" : "Next card"}
+                <kbd className="ml-1 hidden rounded border border-white/40 bg-white/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-white/90 sm:inline">
+                  ⏎
+                </kbd>
+              </Button>
+            </motion.div>
+          )}
+          <p className="mt-3 text-center text-xs text-muted-foreground">
+            Grading ignores case, spacing and punctuation · accents count ·{" "}
+            <kbd className="rounded border bg-muted px-1">?</kbd> all shortcuts
+          </p>
+        </>
+      ) : (
+        <>
+          {/* ---------- Flashcard ---------- */}
+          <div className="mt-6" style={{ perspective: "1400px" }}>
         <button
           className={`relative block w-full text-left transition-transform duration-500 ${
             card?.image_url ? "h-[22rem] sm:h-[24rem]" : "h-72 sm:h-80"
@@ -360,8 +640,10 @@ export function StudyView({ deckId }: { deckId: number }) {
         <kbd className="rounded border bg-muted px-1">2</kbd> got it,{" "}
         <kbd className="rounded border bg-muted px-1">?</kbd> all shortcuts
       </p>
+        </>
+      )}
 
-      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} mode="study" />
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} mode="study" typed={isTyping} />
     </div>
   );
 }

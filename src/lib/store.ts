@@ -15,16 +15,25 @@ interface AppState {
   activeDeckId: number | null;
   /** Whether the study view should open a smart (SM-2) session. */
   studySrs: boolean;
+  /** Whether the study view runs in typed (free-recall) mode. Mutually
+   * exclusive with studySrs — typing practice always uses regular sessions. */
+  studyTyping: boolean;
   boot: () => Promise<void>;
   setAuth: (user: User, token: string) => void;
   /** Replace the cached user row (e.g. after changing the daily goal). */
   updateUser: (user: User) => void;
   logout: () => void;
   go: (view: ViewName, deckId?: number | null) => void;
-  /** Navigate into study mode, optionally as a smart spaced-repetition session. */
-  goStudy: (deckId: number, srs: boolean) => void;
+  /** Navigate into study mode: srs = smart spaced-repetition session,
+   * typing = free-recall (type-the-answer) session. Mutually exclusive. */
+  goStudy: (deckId: number, srs: boolean, typing?: boolean) => void;
   /** Apply a parsed hash state WITHOUT touching the URL (hashchange listener). */
-  applyHashState: (state: { view: ViewName; deckId: number | null; srs: boolean }) => void;
+  applyHashState: (state: {
+    view: ViewName;
+    deckId: number | null;
+    srs: boolean;
+    typing: boolean;
+  }) => void;
 }
 
 /** Global client-side SPA state: auth + which view is on screen.
@@ -36,6 +45,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   view: "auth",
   activeDeckId: null,
   studySrs: false,
+  studyTyping: false,
 
   boot: async () => {
     const token = getAuthToken();
@@ -51,7 +61,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Deep link: restore the view encoded in the URL hash (default: decks).
       const parsed = hashToView(window.location.hash);
       if (parsed) {
-        set({ user, view: parsed.view, activeDeckId: parsed.deckId, studySrs: parsed.srs });
+        set({
+          user,
+          view: parsed.view,
+          activeDeckId: parsed.deckId,
+          studySrs: parsed.srs,
+          studyTyping: parsed.typing,
+        });
       } else {
         set({ user, view: "decks" });
       }
@@ -67,7 +83,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setAuth: (user, token) => {
     setAuthToken(token);
-    set({ user, view: "decks", activeDeckId: null, studySrs: false });
+    set({ user, view: "decks", activeDeckId: null, studySrs: false, studyTyping: false });
     pushHash(""); // keep the URL clean around auth transitions
   },
 
@@ -75,21 +91,24 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   logout: () => {
     setAuthToken(null);
-    set({ user: null, view: "auth", activeDeckId: null, studySrs: false });
+    set({ user: null, view: "auth", activeDeckId: null, studySrs: false, studyTyping: false });
     pushHash(""); // keep the URL clean around auth transitions
   },
 
   go: (view, deckId = null) => {
+    // Deep-linking into study from another surface (e.g. stats "Practice")
+    // keeps whatever study flavor is currently selected; leaving study resets.
     const srs = view === "study" ? get().studySrs : false;
-    set({ view, activeDeckId: deckId, studySrs: srs });
-    pushHash(viewToHash(view, deckId, srs));
+    const typing = view === "study" ? get().studyTyping : false;
+    set({ view, activeDeckId: deckId, studySrs: srs, studyTyping: typing });
+    pushHash(viewToHash(view, deckId, srs, typing));
   },
 
-  goStudy: (deckId, srs) => {
-    set({ view: "study", activeDeckId: deckId, studySrs: srs });
-    pushHash(viewToHash("study", deckId, srs));
+  goStudy: (deckId, srs, typing = false) => {
+    set({ view: "study", activeDeckId: deckId, studySrs: srs, studyTyping: typing });
+    pushHash(viewToHash("study", deckId, srs, typing));
   },
 
-  applyHashState: ({ view, deckId, srs }) =>
-    set({ view, activeDeckId: deckId, studySrs: srs }),
+  applyHashState: ({ view, deckId, srs, typing }) =>
+    set({ view, activeDeckId: deckId, studySrs: srs, studyTyping: typing }),
 }));

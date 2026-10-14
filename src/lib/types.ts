@@ -178,6 +178,20 @@ export interface ReviewOut {
   finished: boolean;
 }
 
+/** Response for POST /study/typed — server-side graded free-recall answer.
+ * `almost` marks a 1-character-off answer (advisory; result is still "wrong"
+ * — the client may offer an "I was right" override via /study/review). */
+export interface TypedAnswerOut {
+  card_id: number;
+  correct: boolean;
+  almost: boolean;
+  correct_answer: string;
+  selected_answer: string;
+  reviewed: number;
+  total: number;
+  finished: boolean;
+}
+
 // ----------------------------- Quiz -----------------------------
 /** `direction` query param for quiz start: "deck" defers to the deck's preset. */
 export type QuizDirection = "front" | "back" | "deck";
