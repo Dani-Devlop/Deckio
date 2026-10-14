@@ -4,6 +4,7 @@ Grouped by domain: Auth, Decks, Cards, Study, Quiz, Stats.
 `from_attributes=True` allows building response models directly from ORM rows.
 """
 
+import re
 from datetime import datetime
 from typing import Literal
 
@@ -148,6 +149,15 @@ MAX_TAGS_PER_CARD = 8
 MAX_TAG_LENGTH = 32
 MAX_HINT_LENGTH = 300
 MAX_IMAGE_URL_LENGTH = 500
+# Inline images travel as base64 data URIs (~4/3 overhead): 700k chars ≈ 512KB
+# of binary — the ceiling for a small embedded picture.
+MAX_DATA_URI_LENGTH = 700_000
+# Coarse Field-level cap for image_url. Deliberately ABOVE both real budgets
+# (500-char URLs, 700k-char data URIs) so oversized payloads reach
+# clean_image_url and get its specific messages (e.g. "Inline image too
+# large") instead of a generic Pydantic length error, while absurd
+# multi-megabyte strings are still rejected before validation logic runs.
+IMAGE_FIELD_MAX_LENGTH = 1_000_000
 
 # Allowed image sources for Card.image_url:
 # - http(s):// external URLs
@@ -155,9 +165,25 @@ MAX_IMAGE_URL_LENGTH = 500
 # - protocol-relative "//cdn.example/x.png" and relative "/uploads/x.png"
 _IMAGE_PREFIXES = ("http://", "https://", "data:image/", "//", "/")
 
+# Inline images: raster mimes only, base64 payload only. SVG is deliberately
+# excluded — SVG can carry <script>, so rendering user-supplied SVG is an XSS
+# risk (<img src> or not).
+_DATA_URI_RE = re.compile(
+    r"^data:image/(png|jpeg|jpg|webp|gif);base64,[A-Za-z0-9+/=\r\n]+$"
+)
+
+
+def is_valid_data_uri(url: str) -> bool:
+    """True when `url` is an allowed inline image (raster mime, base64 shape)."""
+    return bool(_DATA_URI_RE.fullmatch(url))
+
 
 def clean_image_url(url: str | None) -> str | None:
     """Normalize an image URL: trim, drop empties, cap length, sanity-check scheme.
+
+    `data:image/...` payloads follow their own rules: a base64 raster-mime
+    shape and the much larger MAX_DATA_URI_LENGTH budget. Every other prefix
+    keeps the plain 500-character URL rule.
 
     Raises ValueError for clearly invalid input so API clients get feedback
     instead of silently storing a broken image.
@@ -167,6 +193,16 @@ def clean_image_url(url: str | None) -> str | None:
     url = url.strip()
     if not url:
         return None
+    if url.lower().startswith("data:image/"):
+        # Inline image: mime allowlist + base64 shape + dedicated size budget.
+        if len(url) > MAX_DATA_URI_LENGTH:
+            raise ValueError("Inline image too large — keep it under ~500KB")
+        if not is_valid_data_uri(url):
+            raise ValueError(
+                "Inline image must be a base64 data URI: "
+                "data:image/(png|jpeg|jpg|webp|gif) — SVG is not allowed"
+            )
+        return url
     if len(url) > MAX_IMAGE_URL_LENGTH:
         raise ValueError(f"image_url must be at most {MAX_IMAGE_URL_LENGTH} characters")
     if not url.lower().startswith(_IMAGE_PREFIXES):
@@ -220,8 +256,8 @@ class CardBase(BaseModel):
     )
     image_url: str | None = Field(
         default=None,
-        max_length=MAX_IMAGE_URL_LENGTH,
-        description="Optional picture (URL) rendered above the text",
+        max_length=IMAGE_FIELD_MAX_LENGTH,
+        description="Optional picture (URL, or inline data:image/...;base64 URI ≤ ~500KB)",
     )
 
     @field_validator("tags")
@@ -249,7 +285,9 @@ class CardUpdate(BaseModel):
     back: str | None = Field(default=None, min_length=1, max_length=2000)
     tags: list[str] | None = Field(default=None)
     hint: str | None = Field(default=None, max_length=MAX_HINT_LENGTH)
-    image_url: str | None = Field(default=None, max_length=MAX_IMAGE_URL_LENGTH)
+    # Coarse Field cap only; the real per-prefix rules (500-char URLs vs
+    # MAX_DATA_URI_LENGTH data URIs) live in clean_image_url.
+    image_url: str | None = Field(default=None, max_length=IMAGE_FIELD_MAX_LENGTH)
 
     @field_validator("tags")
     @classmethod
@@ -339,6 +377,27 @@ class ReviewIn(BaseModel):
 class ReviewOut(BaseModel):
     card_id: int
     result: Literal["correct", "wrong"]
+    reviewed: int
+    total: int
+    finished: bool
+
+
+class TypedAnswerIn(BaseModel):
+    """Typed (free-recall) answer for the current card — the server grades it."""
+
+    session_id: int
+    card_id: int
+    answer: str = Field(min_length=1, max_length=2000)
+
+
+class TypedAnswerOut(BaseModel):
+    card_id: int
+    correct: bool
+    # "Almost" = exactly one edit away (Levenshtein == 1) from the answer —
+    # lets the client offer an "I was right, just a typo" override.
+    almost: bool
+    correct_answer: str
+    selected_answer: str
     reviewed: int
     total: int
     finished: bool
@@ -520,7 +579,8 @@ class BundleCardIn(BaseModel):
     back: str = Field(min_length=1, max_length=2000)
     tags: list[str] = Field(default_factory=list)
     hint: str | None = Field(default=None, max_length=MAX_HINT_LENGTH)
-    image_url: str | None = Field(default=None, max_length=MAX_IMAGE_URL_LENGTH)
+    # Same policy as CardBase: coarse cap here, real rules in clean_image_url.
+    image_url: str | None = Field(default=None, max_length=IMAGE_FIELD_MAX_LENGTH)
 
     @field_validator("tags")
     @classmethod

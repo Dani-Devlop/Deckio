@@ -104,7 +104,9 @@ class Card(Base):
     # Optional memory aid shown on the question side before flipping.
     hint: Mapped[str | None] = mapped_column(Text, default=None)
     # Optional picture (validated URL) rendered above the text on both sides.
-    image_url: Mapped[str | None] = mapped_column(String(500), default=None)
+    # Text rather than String(500): inline `data:image/...;base64` payloads are
+    # allowed up to ~700k chars (~512KB binary), so the column must not cap.
+    image_url: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # --- Spaced repetition state (simplified SM-2, updated on study reviews) ---

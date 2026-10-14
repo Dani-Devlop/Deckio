@@ -62,7 +62,7 @@ async def run_startup_migrations() -> None:
             "due_at": "ALTER TABLE cards ADD COLUMN due_at DATETIME",
             "tags": "ALTER TABLE cards ADD COLUMN tags TEXT",
             "hint": "ALTER TABLE cards ADD COLUMN hint TEXT",
-            "image_url": "ALTER TABLE cards ADD COLUMN image_url VARCHAR(500)",
+            "image_url": "ALTER TABLE cards ADD COLUMN image_url TEXT",
         }
         for name, ddl in card_additions.items():
             if name not in card_cols:

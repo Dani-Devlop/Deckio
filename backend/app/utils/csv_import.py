@@ -16,7 +16,9 @@ image/image_url/picture columns. Without a header, parsing stays positional
 (3rd column = tags, 4th = hint, 5th = image URL). The third column holds tags
 separated by `|` (e.g. `verbs|beginner`); the fourth is a hint shown on the
 question side while studying; the fifth is an image URL rendered above the
-text. Exact duplicate rows within a file are silently de-duplicated; invalid
+text — either a plain http(s) URL (≤500 chars) or an inline
+`data:image/...;base64` payload (same rules as the API's clean_image_url).
+Exact duplicate rows within a file are silently de-duplicated; invalid
 rows are reported with row numbers.
 """
 
@@ -50,6 +52,11 @@ def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
     errors: list[str] = []
     cards: list[CsvCard] = []
     seen: set[tuple[str, str]] = set()
+
+    # Local import: app.schemas imports MAX_ROWS_PER_IMPORT from this module,
+    # so a module-level import would be circular. Keeps the inline-image
+    # rules (regex + size budget) in ONE place — schemas.clean_image_url.
+    from ..schemas import MAX_DATA_URI_LENGTH, is_valid_data_uri
 
     # Normalize line endings and strip a possible UTF-8 BOM.
     text = text.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
@@ -113,14 +120,28 @@ def parse_cards_csv(text: str) -> tuple[list[CsvCard], list[str]]:
         # Optional hint (trimmed, capped, empty → None).
         hint = hint_src.strip()[:MAX_HINT_LEN] or None
 
-        # Optional image URL (light scheme check, empty → None).
+        # Optional image URL (empty → None). Same policy as the API's
+        # clean_image_url(): `data:image/...` payloads get the (much larger)
+        # inline-image budget plus mime/base64 checks; every other prefix
+        # keeps the plain 500-character URL rule. Row errors keep the
+        # long-standing "image URL" phrasing expected by the UI.
         image_url: str | None = None
         raw_url = image_src.strip()
         if raw_url:
-            if len(raw_url) > MAX_IMAGE_URL_LEN:
+            if raw_url.lower().startswith("data:image/"):
+                if len(raw_url) > MAX_DATA_URI_LENGTH:
+                    errors.append(f"Row {i}: Inline image too large — keep it under ~500KB")
+                    continue
+                if not is_valid_data_uri(raw_url):
+                    errors.append(
+                        f"Row {i}: Inline image must be a base64 data URI: "
+                        "data:image/(png|jpeg|jpg|webp|gif) — SVG is not allowed"
+                    )
+                    continue
+            elif len(raw_url) > MAX_IMAGE_URL_LEN:
                 errors.append(f"Row {i}: image URL exceeds {MAX_IMAGE_URL_LEN} characters.")
                 continue
-            if not raw_url.lower().startswith(("http://", "https://", "data:image/", "//", "/")):
+            elif not raw_url.lower().startswith(("http://", "https://", "data:image/", "//", "/")):
                 errors.append(
                     f"Row {i}: image URL must start with http://, https://, data:image/ or / "
                 )

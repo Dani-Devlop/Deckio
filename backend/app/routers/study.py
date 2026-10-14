@@ -4,6 +4,8 @@ Flow:
     POST /decks/{id}/study/start  → opens a session for the whole deck
     GET  /decks/{id}/study/next   → next un-reviewed card (random order)
     POST /study/review            → record correct/wrong for one card
+    POST /study/typed             → submit a typed (free-recall) answer;
+                                    the server grades it (correct / almost)
 
 The server tracks progress by comparing `card_reviews` rows against the
 deck's card list, so sessions survive page reloads and card edits.
@@ -16,6 +18,7 @@ Smart review (`?srs=true`) additionally honors the deck's presets:
 """
 
 import json
+import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
@@ -24,7 +27,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..deps import get_current_user, get_owned_deck, load_owned_session
 from ..models import Card, CardReview, Deck, StudySession, User, utcnow
-from ..schemas import ReviewIn, ReviewOut, StudyNextOut, StudyStartOut
+from ..schemas import (
+    ReviewIn,
+    ReviewOut,
+    StudyNextOut,
+    StudyStartOut,
+    TypedAnswerIn,
+    TypedAnswerOut,
+)
 from ..utils.srs import apply_sm2
 
 router = APIRouter(tags=["Study"])
@@ -114,6 +124,41 @@ async def _session_progress(db: AsyncSession, session: StudySession) -> tuple[in
         select(func.count()).select_from(CardReview).where(CardReview.session_id == session.id)
     )
     return int(reviewed or 0), int(total or 0)
+
+
+# Punctuation stripped from BOTH sides when grading typed answers. Accents
+# and diacritics are deliberately NOT touched — for language learners "casa"
+# and "cásá" are different words and must be typed correctly.
+_ANSWER_PUNCT = ".,!?;:…\"'“”«»()[]{}~*_-—–"
+
+
+def _normalize_answer(s: str) -> str:
+    """Normalize a typed answer / card side for forgiving comparison.
+
+    Unicode NFKC + casefold (case-insensitive), whitespace runs collapsed to
+    single spaces, leading/trailing punctuation stripped. Accents/diacritics
+    stay significant ("casa" ≠ "cásá").
+    """
+    s = unicodedata.normalize("NFKC", s).casefold()
+    s = " ".join(s.split())  # collapse internal whitespace + drop edge whitespace
+    return s.strip(_ANSWER_PUNCT).strip()
+
+
+def _levenshtein(a: str, b: str) -> int:
+    """Iterative two-row Levenshtein edit distance (fine for short answers)."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        cur = [i]
+        for j, cb in enumerate(b, start=1):
+            cur.append(min(prev[j] + 1, cur[-1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
 
 
 @router.post(
@@ -357,6 +402,101 @@ async def submit_review(
     return ReviewOut(
         card_id=card.id,
         result=payload.result,
+        reviewed=reviewed,
+        total=total,
+        finished=finished,
+    )
+
+
+@router.post(
+    "/study/typed",
+    response_model=TypedAnswerOut,
+    summary="Submit a typed (free-recall) answer for the current card; server grades it",
+)
+async def submit_typed_answer(
+    payload: TypedAnswerIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TypedAnswerOut:
+    session = await load_owned_session(db, user, payload.session_id)
+    if session.mode != "study":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This session is not a study session",
+        )
+
+    card = await db.get(Card, payload.card_id)
+    if card is None or card.deck_id != session.deck_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Card does not belong to this session's deck",
+        )
+
+    # The answer side is ALWAYS card.back — typed mode always shows the front
+    # and expects the back to be typed. (The quiz's session quiz_direction
+    # does not apply here; typed study is not direction-aware.)
+    correct_answer = card.back
+    typed = _normalize_answer(payload.answer)
+    expected = _normalize_answer(correct_answer)
+    correct = typed == expected
+
+    # "Almost" = exactly one edit (a single typo) away on reasonably long
+    # answers. The client uses it to offer an "I was right" override — that
+    # override is NOT part of this endpoint: the client simply calls the
+    # EXISTING POST /study/review with result="correct" afterwards and the
+    # review upsert below is last-wins.
+    almost = False
+    if not correct:
+        almost = (
+            _levenshtein(typed, expected) == 1
+            and min(len(typed), len(expected)) >= 3
+        )
+
+    result = "correct" if correct else "wrong"
+
+    # Upsert exactly like submit_review, but also persist what the user typed
+    # (selected_answer, same pattern as the quiz answer upsert) so exports
+    # and the result screens can show it.
+    review = (
+        await db.scalars(
+            select(CardReview).where(
+                CardReview.session_id == session.id, CardReview.card_id == card.id
+            )
+        )
+    ).first()
+    if review is not None:
+        review.result = result
+        review.selected_answer = payload.answer
+        review.reviewed_at = utcnow()
+    else:
+        db.add(
+            CardReview(
+                session_id=session.id,
+                card_id=card.id,
+                result=result,
+                selected_answer=payload.answer,
+                reviewed_at=utcnow(),
+            )
+        )
+
+    # Study-mode reviews drive SM-2 scheduling (same as submit_review).
+    if session.mode == "study":
+        apply_sm2(card, correct)
+
+    await db.commit()
+
+    reviewed, total = await _session_progress(db, session)
+    finished = reviewed >= total
+    if finished and session.finished_at is None:
+        session.finished_at = utcnow()
+        await db.commit()
+
+    return TypedAnswerOut(
+        card_id=card.id,
+        correct=correct,
+        almost=almost,
+        correct_answer=correct_answer,
+        selected_answer=payload.answer,
         reviewed=reviewed,
         total=total,
         finished=finished,
