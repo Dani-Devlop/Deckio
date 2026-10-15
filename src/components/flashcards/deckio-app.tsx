@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { BarChart3, Layers, LogOut, Moon, Search, Settings, Sun } from "lucide-react";
+import { BarChart3, FlaskConical, Layers, LogOut, Moon, Search, Settings, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 
@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { hashToView } from "@/lib/hash-nav";
+import { isDemoMode } from "@/lib/demo-backend";
 import { useAppStore } from "@/lib/store";
 
 import { AccountSettingsDialog } from "./account-settings-dialog";
@@ -61,6 +62,27 @@ function ThemeToggle() {
   );
 }
 
+/** Small "Demo" pill shown when the app runs on the in-browser backend
+ * (GitHub Pages static demo / `?demo=1`). Hydration-safe: only rendered
+ * after mount, so the SSR pass (no window) never disagrees with the client. */
+function DemoBadge() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setShow(isDemoMode());
+  }, []);
+  if (!show) return null;
+  return (
+    <span
+      title="Static demo — everything you do is stored only in this browser"
+      className="hidden items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400 sm:inline-flex"
+    >
+      <FlaskConical className="h-3.5 w-3.5" aria-hidden />
+      Demo
+    </span>
+  );
+}
+
 function SiteHeader() {
   const { user, view, go, logout } = useAppStore();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -68,7 +90,10 @@ function SiteHeader() {
   return (
     <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-3 px-4">
-        <BrandLogo onClick={() => go("decks")} />
+        <div className="flex items-center gap-3">
+          <BrandLogo onClick={() => go("decks")} />
+          <DemoBadge />
+        </div>
 
         <nav className="flex items-center gap-1.5" aria-label="Main navigation">
           <Button

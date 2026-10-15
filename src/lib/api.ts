@@ -30,6 +30,7 @@ import type {
   User,
   WeakCard,
 } from "./types";
+import { DEMO_TOKEN, DemoApiError, demoRequest, isDemoMode } from "./demo-backend";
 
 const API_PORT = process.env.NEXT_PUBLIC_API_PORT ?? "8001";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
@@ -45,6 +46,8 @@ export class ApiError extends Error {
 
 export function getAuthToken(): string | null {
   if (typeof window === "undefined") return null;
+  // Demo mode auto-signs in — the in-browser backend has no real sessions.
+  if (isDemoMode()) return window.localStorage.getItem(TOKEN_KEY) ?? DEMO_TOKEN;
   return window.localStorage.getItem(TOKEN_KEY);
 }
 
@@ -52,6 +55,19 @@ export function setAuthToken(token: string | null): void {
   if (typeof window === "undefined") return;
   if (token) window.localStorage.setItem(TOKEN_KEY, token);
   else window.localStorage.removeItem(TOKEN_KEY);
+}
+
+/** Trigger a client-side download of a text payload (CSV exports). */
+function downloadTextFile(text: string, filename: string): void {
+  const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function buildUrl(path: string): string {
@@ -66,6 +82,16 @@ async function request<T>(
   body?: unknown,
   opts?: { raw?: BodyInit; contentType?: string }
 ): Promise<T> {
+  // GitHub Pages / `?demo=1`: route the call to the in-browser backend.
+  if (isDemoMode()) {
+    try {
+      return await demoRequest<T>(method, path, body, opts);
+    } catch (err) {
+      if (err instanceof DemoApiError) throw new ApiError(err.status, err.message);
+      throw new ApiError(0, "Demo backend error — try clearing this site's local storage");
+    }
+  }
+
   const headers: Record<string, string> = {};
   const token = getAuthToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -117,6 +143,15 @@ async function request<T>(
 }
 
 async function requestText(path: string): Promise<string> {
+  // CSV exports are plain strings in demo mode too.
+  if (isDemoMode()) {
+    try {
+      return await demoRequest<string>("GET", path);
+    } catch (err) {
+      if (err instanceof DemoApiError) throw new ApiError(err.status, err.message);
+      throw new ApiError(0, "Demo backend error — try clearing this site's local storage");
+    }
+  }
   const headers: Record<string, string> = {};
   const token = getAuthToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -268,6 +303,15 @@ export const api = {
   exportReviewsCsv: async (deckId?: number): Promise<void> => {
     const path =
       deckId != null ? `/api/decks/${deckId}/export/reviews.csv` : "/api/stats/export/reviews.csv";
+
+    // Demo mode: requestText routes to the in-browser backend (no headers to
+    // read), so build the filename client-side and download the string.
+    if (isDemoMode()) {
+      const csv = await requestText(path);
+      downloadTextFile(csv, deckId != null ? "deckio-deck-reviews.csv" : "deckio-reviews.csv");
+      return;
+    }
+
     const headers: Record<string, string> = {};
     const token = getAuthToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -295,7 +339,6 @@ export const api = {
       throw new ApiError(res.status, message);
     }
 
-    const blob = await res.blob();
     // Prefer the server's filename (Content-Disposition) with a sane fallback.
     const disposition = res.headers.get("Content-Disposition") ?? "";
     const match = /filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i.exec(disposition);
@@ -303,13 +346,6 @@ export const api = {
       (match ? decodeURIComponent(match[1] ?? match[2] ?? "").replace(/[/\\]/g, "") : "") ||
       "deckio-reviews.csv";
 
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    downloadTextFile(await res.text(), filename);
   },
 };

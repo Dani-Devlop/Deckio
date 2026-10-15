@@ -1,6 +1,8 @@
 # 📚 Deckio — Simple Flashcards API & Web App
 
 <p>
+  <a href="https://dani-devlop.github.io/Deckio/"><img alt="Live demo" src="https://img.shields.io/badge/Live_demo-Play_in_browser-f59e0b?logo=githubpages&logoColor=white" /></a>
+  <a href="https://github.com/Dani-Devlop/Deckio/actions/workflows/pages.yml"><img alt="Deploy demo to GitHub Pages" src="https://github.com/Dani-Devlop/Deckio/actions/workflows/pages.yml/badge.svg" /></a>
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-0.115+-009485?logo=fastapi&logoColor=white" />
   <img alt="Python" src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" />
   <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" />
@@ -12,6 +14,25 @@
 A lightweight, product-focused **flashcards platform**: manage decks, practice with flip-card
 study sessions, take auto-generated multiple-choice quizzes, and track learning progress —
 exposed through a clean REST API and bundled with a polished web client.
+
+## 🌐 Live demo — no setup, no server
+
+**[▶ Play the interactive demo](https://dani-devlop.github.io/Deckio/)** — the full web app,
+deployed to GitHub Pages on every push to `main` (`.github/workflows/pages.yml`). It runs on
+an **in-browser demo backend** (`src/lib/demo-backend.ts`): a faithful client-side mirror of
+the FastAPI API — same routes, same JSON shapes, same SM-2 scheduling — persisting to
+`localStorage` instead of a database. You arrive signed in with four seeded decks and a
+month of review history, so every screen (smart review, quizzes, stats heatmap, CSV
+import/export) works end-to-end without a server.
+
+| | |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Study](docs/screenshots/study.png) |
+| ![Quiz](docs/screenshots/quiz.png) | ![Stats](docs/screenshots/stats.png) |
+
+> Prefer to try it locally? Run any built version of the web app with **`?demo=1`** in the URL
+> (e.g. `http://localhost:3000/?demo=1`) — the in-browser backend takes over. Rebuild the
+> static bundle yourself with `bun run build:demo` (outputs to `out/`).
 
 | Live stack | |
 |---|---|
@@ -121,6 +142,9 @@ NEXT_PUBLIC_API_URL=http://localhost:8000 bun run dev   # http://localhost:3000
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | *(unset → sandbox gateway mode)* | Absolute API base, e.g. `http://localhost:8000`. Unset = same-origin `/api` + `XTransformPort` gateway routing. |
 | `NEXT_PUBLIC_API_PORT` | `8001` | Gateway mode only: backend port behind the preview gateway |
+| `NEXT_PUBLIC_DEMO_MODE` | *(unset)* | `1` = run on the in-browser demo backend (set automatically by `build:demo`) |
+| `DEMO_EXPORT` | *(unset)* | `1` = static `output: "export"` build for GitHub Pages (used by `build:demo` and the Pages workflow) |
+| `NEXT_PUBLIC_BASE_PATH` | *(unset)* | Base path for the Pages deploy (the workflow sets it to `/<repo-name>`) |
 
 ## 📡 API overview
 
@@ -253,7 +277,9 @@ Deckio/
 │   ├── app/                  # layout + single-page client app
 │   ├── components/flashcards/# auth, dashboard, deck detail, study, quiz, stats, command palette
 │   └── lib/                  # typed API client, zustand store, helpers
-├── docs/API.md               # full API reference
+│       └── demo-backend.ts   # in-browser API mirror powering the GitHub Pages demo
+├── docs/                     # API reference + README screenshots
+├── .github/workflows/pages.yml  # deploys the static demo to GitHub Pages
 ├── scripts/dev-backend.sh    # local backend dev helper
 ├── docker-compose.yml        # db + api + web
 └── Dockerfile                # web image (Bun build → node runner)
@@ -262,6 +288,7 @@ Deckio/
 ## 🧪 Quality
 
 - **100-check cumulative API smoke suite** (auth, CRUD, CSV edge cases, tags & hints, search, bundles, share links, session flow, stats math, daily goal, rate limiting) — all passing
+- **Interactive demo verified in-browser**: static export boots, seeds and serves the full app from a plain file server
 - ESLint clean (Next.js 16 + react-hooks rules)
 - Ownership enforced on every resource; foreign ids return `404` (no existence leaks)
 - Typed end-to-end: Pydantic schemas ↔ TypeScript interfaces in `src/lib/types.ts`
